@@ -2,10 +2,14 @@
 
 An AppKit framework for morphing text on a label, character by character.
 
+![Shape Morph](Docs/shapemorph.gif)
+
 `MorphingLabel` lays out its text with Core Text, gives every character its own
 layer, and diffs old vs. new text when it changes: characters present in both
 strings fly to their new position, removed characters animate out, and added
-characters animate in — using a pluggable effect.
+characters animate in — using a pluggable effect. The signature **Shape Morph**
+effect goes further: it extracts the actual glyph outlines from the font and
+interpolates one character's shape into the next, in place.
 
 ## Usage
 
@@ -14,12 +18,27 @@ import LabelMorph
 
 let label = MorphingLabel()
 label.font = .systemFont(ofSize: 48, weight: .semibold)
-label.effect = MorphPreset.bounce.makeEffect(intensity: 0.7)
-label.timing = MorphTiming(duration: 0.6, stagger: 0.04)
+label.effect = MorphPreset.shapeMorph.makeEffect(intensity: 0.7)
+label.timing = MorphTiming(duration: 0.55, stagger: 0.045)
 
 label.text = "Hello, World!"   // morphs using the current effect
 label.setText("Goodbye!", animated: false)
 ```
+
+`duration` is the animation time for a single character; `stagger` adds a
+per-character start delay, so a whole morph takes roughly
+`duration + stagger × (characters − 1)`.
+
+## Installation
+
+Swift Package Manager:
+
+```swift
+.package(url: "https://github.com/everlof/LabelMorph.git", branch: "main")
+```
+
+Or generate the Xcode project with [XcodeGen](https://github.com/yonaskolb/XcodeGen)
+and embed the `LabelMorph` framework target.
 
 ## Built-in presets
 
@@ -38,6 +57,10 @@ label.setText("Goodbye!", animated: false)
 
 Every preset exposes `recommendedTiming` and takes an `intensity` (0…1) that
 scales its parameters (distance, spring damping, blur radius, …).
+
+| Bounce | Scramble | Blur |
+| --- | --- | --- |
+| ![Bounce](Docs/bounce.gif) | ![Scramble](Docs/scramble.gif) | ![Blur](Docs/blur.gif) |
 
 ## Custom effects
 
@@ -65,14 +88,12 @@ each changed pair.
 
 ## Showcase app
 
+![Showcase app](Docs/hero.png)
+
 The `Showcase` target is a small app for playing with the effects: an effect
 picker, sliders for duration / stagger / intensity / font size, easing
 selection, custom text input, phrase cycling (click the preview), auto-play,
 and a toggle for character reuse.
-
-## Building
-
-The Xcode project is generated with [XcodeGen](https://github.com/yonaskolb/XcodeGen):
 
 ```sh
 xcodegen generate

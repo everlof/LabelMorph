@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                               backing: .buffered,
                               defer: false)
         window.title = "LabelMorph Showcase"
+        window.isRestorable = false
         window.contentViewController = ShowcaseViewController()
         window.setContentSize(NSSize(width: 980, height: 700))
         window.minSize = NSSize(width: 760, height: 540)

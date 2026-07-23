@@ -232,6 +232,19 @@ final class ShowcaseViewController: NSViewController {
 
         loadRecommendedTiming(for: currentPreset)
         applySettings()
+
+        // Launch arguments for scripted demos: -preset <rawValue> -autoplay YES
+        let defaults = UserDefaults.standard
+        if let presetName = defaults.string(forKey: "preset"),
+           let index = MorphPreset.allCases.firstIndex(where: { $0.rawValue == presetName }) {
+            presetPopup.selectItem(at: index)
+            loadRecommendedTiming(for: currentPreset)
+            applySettings()
+        }
+        if defaults.bool(forKey: "autoplay") {
+            autoCheckbox.state = .on
+            autoToggled()
+        }
     }
 
     // MARK: - Actions
