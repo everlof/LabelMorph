@@ -121,10 +121,27 @@ public final class MorphingLabel: NSView {
 
         // Resolve the label's final geometry now, so every animation is built
         // against the bounds the text will actually settle in.
+        let originBefore = convert(NSPoint.zero, to: nil)
         isResolvingMorphLayout = true
         invalidateIntrinsicContentSize()
         window?.layoutIfNeeded()
         isResolvingMorphLayout = false
+
+        // Auto Layout may have shifted the label itself (re-centering after a
+        // width change). Shift the old characters' model frames to keep their
+        // on-screen position, so travel to the new layout happens inside the
+        // morph animations — otherwise the whole line jumps first and morphs
+        // second.
+        let originAfter = convert(NSPoint.zero, to: nil)
+        let shift = NSPoint(x: originBefore.x - originAfter.x, y: originBefore.y - originAfter.y)
+        if shift != .zero {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            for charLayer in oldLayers {
+                charLayer.frame = charLayer.frame.offsetBy(dx: shift.x, dy: shift.y)
+            }
+            CATransaction.commit()
+        }
 
         let newSlots = CharacterLayout.visibleSlots(for: newText, font: font, bounds: bounds, alignment: alignment)
         visibleSlots = newSlots
