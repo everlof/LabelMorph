@@ -18,6 +18,7 @@ import LabelMorph
 
 let label = MorphingLabel()
 label.font = .systemFont(ofSize: 48, weight: .semibold)
+label.textColor = .labelColor
 label.effect = MorphPreset.shapeMorph.makeEffect(intensity: 0.7)
 label.timing = MorphTiming(duration: 0.55, stagger: 0.045)
 
@@ -28,6 +29,10 @@ label.setText("Goodbye!", animated: false)
 `duration` is the animation time for a single character; `stagger` adds a
 per-character start delay, so a whole morph takes roughly
 `duration + stagger × (characters − 1)`.
+
+`textColor` accepts ordinary, semantic, and custom dynamic `NSColor` values.
+Visible glyphs and an in-flight Shape Morph update automatically when the
+label's effective appearance changes.
 
 ## Installation
 
@@ -104,3 +109,7 @@ open LabelMorph.xcodeproj   # run the "Showcase" scheme
 
 - Single-line text only (no wrapping); left-to-right scripts.
 - Requires macOS 13+.
+
+## License
+
+LabelMorph is available under the [MIT License](LICENSE).

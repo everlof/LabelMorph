@@ -16,7 +16,7 @@ public final class MorphingLabel: NSView {
     }
 
     public var textColor: NSColor = .labelColor {
-        didSet { rebuild() }
+        didSet { updateTextColors() }
     }
 
     public var alignment: NSTextAlignment = .center {
@@ -92,6 +92,11 @@ public final class MorphingLabel: NSView {
     public override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
         updateContentsScale()
+    }
+
+    public override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateTextColors()
     }
 
     // MARK: - Morphing
@@ -278,7 +283,7 @@ public final class MorphingLabel: NSView {
         let charLayer = CATextLayer()
         charLayer.string = NSAttributedString(
             string: slot.character,
-            attributes: CharacterLayout.textAttributes(font: font, color: textColor.cgColor)
+            attributes: CharacterLayout.textAttributes(font: font, color: resolvedTextColor())
         )
         charLayer.frame = slot.frame
         charLayer.contentsScale = window?.backingScaleFactor ?? 2
@@ -337,5 +342,42 @@ public final class MorphingLabel: NSView {
     private func updateContentsScale() {
         let scale = window?.backingScaleFactor ?? 2
         (charLayers + leavingLayers).forEach { $0.contentsScale = scale }
+    }
+
+    /// Resolves semantic and custom dynamic colours in this view's effective
+    /// appearance before storing them in Core Animation's non-dynamic CGColor.
+    private func resolvedTextColor() -> CGColor {
+        var resolved = textColor.cgColor
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            resolved = textColor.cgColor
+        }
+        return resolved
+    }
+
+    /// Updates existing model layers in place so an appearance switch does not
+    /// cancel or restart an in-flight morph.
+    private func updateTextColors() {
+        let color = resolvedTextColor()
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+
+        for textLayer in charLayers + leavingLayers {
+            guard let attributed = textLayer.string as? NSAttributedString else { continue }
+            let recolored = NSMutableAttributedString(attributedString: attributed)
+            recolored.addAttribute(
+                NSAttributedString.Key(kCTForegroundColorAttributeName as String),
+                value: color,
+                range: NSRange(location: 0, length: recolored.length)
+            )
+            textLayer.string = recolored
+        }
+
+        layer?.sublayers?
+            .compactMap { $0 as? CAShapeLayer }
+            .filter { $0.name == MorphTransientLayer.name }
+            .forEach { $0.fillColor = color }
+
+        CATransaction.commit()
     }
 }

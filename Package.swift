@@ -11,5 +11,6 @@ let package = Package(
     ],
     targets: [
         .target(name: "LabelMorph"),
+        .testTarget(name: "LabelMorphTests", dependencies: ["LabelMorph"]),
     ]
 )
