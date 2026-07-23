@@ -1,0 +1,36 @@
+name: LabelMorph
+options:
+  bundleIdPrefix: com.everlof
+  deploymentTarget:
+    macOS: "13.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    GENERATE_INFOPLIST_FILE: YES
+    CODE_SIGN_STYLE: Automatic
+
+targets:
+  LabelMorph:
+    type: framework
+    platform: macOS
+    sources:
+      - Sources/LabelMorph
+    settings:
+      base:
+        PRODUCT_NAME: LabelMorph
+        DEFINES_MODULE: YES
+        SKIP_INSTALL: YES
+
+  Showcase:
+    type: application
+    platform: macOS
+    sources:
+      - Showcase
+    dependencies:
+      - target: LabelMorph
+        embed: true
+    settings:
+      base:
+        PRODUCT_NAME: LabelMorphShowcase
