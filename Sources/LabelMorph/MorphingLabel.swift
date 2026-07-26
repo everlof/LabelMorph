@@ -11,16 +11,41 @@ public final class MorphingLabel: NSView {
 
     // MARK: - Public API
 
+    // Each of these three rebuilds or repaints every glyph layer, and a host that
+    // reconfigures a reused view restates all of them on every pass. Assigning the value
+    // already in force must therefore cost nothing.
+
     public var font: NSFont = .systemFont(ofSize: 48, weight: .semibold) {
-        didSet { rebuild() }
+        didSet {
+            guard font != oldValue else { return }
+            truncationCache = nil
+            rebuild()
+        }
+    }
+
+    /// How text wider than the label is shortened. `intrinsicContentSize` still reports the
+    /// whole text's width, so Auto Layout is told what the label wants and truncation only
+    /// describes what it does once given less.
+    public var truncation: MorphTruncation = .none {
+        didSet {
+            guard truncation != oldValue else { return }
+            truncationCache = nil
+            rebuild()
+        }
     }
 
     public var textColor: NSColor = .labelColor {
-        didSet { updateTextColors() }
+        didSet {
+            guard textColor != oldValue else { return }
+            updateTextColors()
+        }
     }
 
     public var alignment: NSTextAlignment = .center {
-        didSet { relayoutCurrent() }
+        didSet {
+            guard alignment != oldValue else { return }
+            relayoutCurrent()
+        }
     }
 
     /// The strategy used to animate characters. See `MorphPreset` for the
@@ -103,10 +128,35 @@ public final class MorphingLabel: NSView {
 
     private var storedText: String = ""
     private var visibleSlots: [CharacterSlot] = []
+
+    /// The characters currently *drawn*, in visual order — read from the layers rather than
+    /// the slot model, because the one bug worth testing here is exactly the two disagreeing:
+    /// a reposition pass that updates the model but leaves a stale glyph on screen. `text`
+    /// deliberately reports neither.
+    var displayedCharacters: [String] {
+        charLayers.compactMap { ($0.string as? NSAttributedString)?.string }
+    }
     private var charLayers: [CATextLayer] = []
     private var leavingLayers: [CATextLayer] = []
     private var generation = 0
     private var isResolvingMorphLayout = false
+
+    /// Truncation is recomputed on every layout pass, and a sidebar full of these lays out
+    /// often, so the answer is kept until the text, the width or the font moves.
+    private var truncationCache: (text: String, width: CGFloat, result: String)?
+
+    /// The string actually laid out: the text itself, or its ellipsized head.
+    private func displayText(in bounds: CGRect) -> String {
+        guard truncation == .tail else { return storedText }
+
+        if let cache = truncationCache, cache.text == storedText, cache.width == bounds.width {
+            return cache.result
+        }
+
+        let result = CharacterLayout.tailTruncated(storedText, font: font, width: bounds.width)
+        truncationCache = (storedText, bounds.width, result)
+        return result
+    }
 
     private func morph(to newText: String) {
         generation += 1
@@ -148,7 +198,11 @@ public final class MorphingLabel: NSView {
             CATransaction.commit()
         }
 
-        let newSlots = CharacterLayout.visibleSlots(for: newText, font: font, bounds: bounds, alignment: alignment)
+        // `storedText` is already the new text, so this is the new line as it will be seen —
+        // truncated if it has to be. Two names sharing a head morph only where they differ.
+        let newSlots = CharacterLayout.visibleSlots(
+            for: displayText(in: bounds), font: font, bounds: bounds, alignment: alignment
+        )
         visibleSlots = newSlots
 
         var newLayers = [CATextLayer?](repeating: nil, count: newSlots.count)
@@ -300,7 +354,9 @@ public final class MorphingLabel: NSView {
         leavingLayers.removeAll()
         purgeTransientLayers()
 
-        visibleSlots = CharacterLayout.visibleSlots(for: storedText, font: font, bounds: bounds, alignment: alignment)
+        visibleSlots = CharacterLayout.visibleSlots(
+            for: displayText(in: bounds), font: font, bounds: bounds, alignment: alignment
+        )
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -316,8 +372,17 @@ public final class MorphingLabel: NSView {
 
     /// Repositions existing layers after a bounds, alignment, or similar change.
     private func relayoutCurrent() {
-        let slots = CharacterLayout.visibleSlots(for: storedText, font: font, bounds: bounds, alignment: alignment)
-        guard slots.count == charLayers.count else {
+        // A width change can change how much of the text fits, so this is also where a
+        // truncated line grows or shrinks — which changes the laid-out characters and falls
+        // through to a rebuild. Compared by *character*, not by count: tail truncation that
+        // drops exactly one character replaces it with the ellipsis, so "hi 😂" shortened and
+        // restored is eight slots either way, and a count guard repositioned the stale "…"
+        // where the emoji belonged — forever, since every later pass agreed about the count.
+        let slots = CharacterLayout.visibleSlots(
+            for: displayText(in: bounds), font: font, bounds: bounds, alignment: alignment
+        )
+        guard slots.count == charLayers.count,
+              zip(slots, visibleSlots).allSatisfy({ $0.character == $1.character }) else {
             rebuild()
             return
         }

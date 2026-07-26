@@ -11,6 +11,10 @@ struct CharacterSlot {
 /// Lays out a single line of text with Core Text and returns per-character frames.
 enum CharacterLayout {
 
+    /// The single character an ellipsized line ends with. One glyph rather than three
+    /// periods, so it occupies one slot and morphs as one thing.
+    static let ellipsis = "\u{2026}"
+
     static func textAttributes(font: NSFont, color: CGColor? = nil) -> [NSAttributedString.Key: Any] {
         var attributes: [NSAttributedString.Key: Any] = [
             .font: font,
@@ -31,6 +35,48 @@ enum CharacterLayout {
         }
         let width = CGFloat(CTLineGetTypographicBounds(makeLine(text, font: font), &ascent, &descent, &leading))
         return CGSize(width: width, height: ascent + descent)
+    }
+
+    /// The longest head of `text` that fits `width` once an ellipsis is appended, or the
+    /// text unchanged when it already fits.
+    ///
+    /// Core Text is asked which character sits at the budget offset rather than searched
+    /// for it: one line, one index lookup, no repeated measuring per candidate length. That
+    /// answer snaps to the nearest character boundary and knows nothing of the kerning
+    /// against an ellipsis that is not in the line yet, so the candidate is measured and
+    /// stepped back by whole composed characters until it genuinely fits — normally not at
+    /// all, and never far.
+    static func tailTruncated(_ text: String, font: NSFont, width: CGFloat) -> String {
+        guard width > 0 else { return "" }
+        guard measure(text, font: font).width > width else { return text }
+
+        let ellipsisWidth = measure(ellipsis, font: font).width
+        guard ellipsisWidth <= width else { return "" }
+
+        let nsText = text as NSString
+        var cut = CTLineGetStringIndexForPosition(
+            makeLine(text, font: font),
+            CGPoint(x: width - ellipsisWidth, y: 0)
+        )
+        if cut == kCFNotFound { cut = nsText.length }
+        cut = max(0, min(cut, nsText.length))
+
+        while cut > 0 {
+            // A head ending in a space would set the ellipsis adrift from the word it
+            // shortens, so the gap goes with the characters it separated.
+            let head = nsText.substring(to: cut).replacingOccurrences(
+                of: "\\s+$",
+                with: "",
+                options: .regularExpression
+            )
+            let candidate = head + ellipsis
+            if measure(candidate, font: font).width <= width { return candidate }
+
+            // Back up by a composed character sequence rather than a UTF-16 unit, or a cut
+            // can land inside a surrogate pair or between a base and its combining mark.
+            cut = nsText.rangeOfComposedCharacterSequence(at: cut - 1).location
+        }
+        return ellipsis
     }
 
     /// All slots except whitespace, in visual order. Whitespace still affects

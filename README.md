@@ -105,6 +105,21 @@ xcodegen generate
 open LabelMorph.xcodeproj   # run the "Showcase" scheme
 ```
 
+## Truncation
+
+A label lays its whole line out from the leading edge, so text wider than the view runs
+past it — and a host that clips cuts it dead mid-glyph. Set `truncation` for the usual
+ellipsis instead:
+
+```swift
+label.truncation = .tail
+```
+
+`intrinsicContentSize` still reports the whole text's width, so Auto Layout is told what
+the label wants and truncation only describes what it does once given less. The ellipsis is
+an ordinary character of the laid-out line, so it morphs like any other: two names sharing
+a head animate only where they actually differ.
+
 ## Notes / limitations
 
 - Single-line text only (no wrapping); left-to-right scripts.
