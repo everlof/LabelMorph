@@ -14,7 +14,7 @@ final class CharacterLayoutTruncationTests: XCTestCase {
     // MARK: - The fit
 
     func testTextThatFitsIsReturnedUnchanged() {
-        let text = "Skalman"
+        let text = "Threading"
         XCTAssertEqual(
             CharacterLayout.tailTruncated(text, font: font, width: width(text) + 10),
             text
@@ -84,8 +84,8 @@ final class CharacterLayoutTruncationTests: XCTestCase {
     }
 
     func testTrailingSpaceIsNotLeftBeforeTheEllipsis() {
-        let text = "Skalman needs a much longer name than this"
-        let target = "Skalman "
+        let text = "Threading needs a much longer name than this"
+        let target = "Threading "
 
         let result = CharacterLayout.tailTruncated(
             text,
@@ -108,13 +108,16 @@ final class CharacterLayoutTruncationTests: XCTestCase {
         label.truncation = .tail
         label.setText(text, animated: false)
 
-        let laidOut = label.layer?.sublayers?.compactMap { $0 as? CATextLayer } ?? []
+        let laidOut = label.layer?.sublayers?.compactMap { $0 as? GlyphLayer } ?? []
         XCTAssertFalse(laidOut.isEmpty)
 
-        // Every glyph inside the label's own bounds — the hard-clip case is a layer whose
-        // frame runs off the trailing edge.
+        // Every glyph inside the label's own bounds — the hard-clip case is a glyph whose
+        // box runs off the trailing edge. Asserted against `inkFrame` rather than the
+        // layer's frame, which is a raster tile: it is deliberately padded past the glyph's
+        // metrics so overhanging ink is not clipped, and it always overruns by that margin.
         for glyph in laidOut {
-            XCTAssertLessThanOrEqual(glyph.frame.maxX, label.bounds.maxX + 0.5)
+            let box = try? XCTUnwrap(glyph.slot?.inkFrame)
+            XCTAssertLessThanOrEqual(box?.maxX ?? .infinity, label.bounds.maxX + 0.5)
         }
     }
 

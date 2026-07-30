@@ -62,7 +62,12 @@ public final class GlyphMorphEffect: TextReplacementMorphEffect {
         guard let attributed = layer.string as? NSAttributedString, attributed.length > 0 else {
             return nil
         }
-        return GlyphPath.path(for: attributed, at: layer.frame)
+        // A glyph layer's frame is padded for ink overhang and snapped to the
+        // pixel grid, so it is a tile rather than a set of metrics. The outline
+        // belongs in the box Core Text laid the glyph out in, which the slot
+        // keeps alongside it.
+        let box = (layer as? GlyphLayer)?.slot?.inkFrame ?? layer.frame
+        return GlyphPath.path(for: attributed, at: box)
     }
 
     /// Hides a text layer until its stand-in shape finishes morphing.

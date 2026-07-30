@@ -4,7 +4,24 @@ import CoreText
 /// The position of a single character (glyph cluster) within a laid-out line.
 struct CharacterSlot {
     let character: String
+    /// The layer's frame: the typographic box padded for ink that overhangs it,
+    /// then snapped outwards to whole device pixels so the tile it carries is
+    /// composited without being resampled. These are not the glyph's metrics —
+    /// see `inkFrame` for those.
     let frame: CGRect
+    /// The exact box Core Text laid the glyph out in, neither padded nor snapped.
+    /// Glyph outlines are positioned in this; `frame` would offset them by the
+    /// padding and misplace them by the rounding.
+    let inkFrame: CGRect
+    /// Which of `GlyphRaster`'s sub-pixel rasters this glyph draws with. The
+    /// fraction of a device pixel `frame` gave up by snapping is not lost — it
+    /// lives here, baked into the bitmap instead of left to the compositor.
+    let phaseBucket: Int
+    /// The glyph's baseline, measured up from `frame`'s bottom edge.
+    let baseline: CGFloat
+    /// How far in from `frame`'s left edge the glyph's origin sits, before the
+    /// sub-pixel phase is added.
+    let inset: CGFloat
     let isWhitespace: Bool
 }
 
@@ -84,14 +101,21 @@ enum CharacterLayout {
     static func visibleSlots(for text: String,
                              font: NSFont,
                              bounds: CGRect,
-                             alignment: NSTextAlignment) -> [CharacterSlot] {
-        allSlots(for: text, font: font, bounds: bounds, alignment: alignment).filter { !$0.isWhitespace }
+                             alignment: NSTextAlignment,
+                             scale: CGFloat) -> [CharacterSlot] {
+        allSlots(for: text, font: font, bounds: bounds, alignment: alignment, scale: scale)
+            .filter { !$0.isWhitespace }
     }
 
+    /// - Parameter scale: the backing scale of the display the line will be drawn
+    ///   on. Layout depends on it because each glyph's frame is snapped to that
+    ///   display's pixel grid, so slots computed for one screen are wrong on
+    ///   another and the label recomputes them when it moves.
     static func allSlots(for text: String,
                          font: NSFont,
                          bounds: CGRect,
-                         alignment: NSTextAlignment) -> [CharacterSlot] {
+                         alignment: NSTextAlignment,
+                         scale: CGFloat) -> [CharacterSlot] {
         guard !text.isEmpty else { return [] }
 
         let nsText = text as NSString
@@ -114,6 +138,17 @@ enum CharacterLayout {
         }
         let originY = bounds.minY + (bounds.height - lineHeight) / 2
 
+        // From here the line is measured in device pixels, because the grid every
+        // glyph has to land on belongs to the display rather than to the layout.
+        // The baseline is snapped once for the whole line — vertical sub-pixel
+        // positioning buys nothing for horizontal text, and a shared baseline is
+        // one fewer thing for the raster cache to key on.
+        let deviceScale = max(scale, 1)
+        let padding = (GlyphRaster.padding * deviceScale).rounded(.up)
+        let baselineDevice = ((originY + descent) * deviceScale).rounded()
+        let tileBottomDevice = (originY * deviceScale).rounded(.down) - padding
+        let tileHeightDevice = (lineHeight * deviceScale).rounded(.up) + padding * 2
+
         var slots: [CharacterSlot] = []
         let runs = CTLineGetGlyphRuns(line) as! [CTRun]
         for run in runs {
@@ -135,13 +170,24 @@ enum CharacterLayout {
                 guard end > start else { continue }
 
                 let character = nsText.substring(with: NSRange(location: start, length: end - start))
-                let frame = CGRect(x: originX + positions[glyph].x,
-                                   y: originY,
-                                   width: advances[glyph].width,
-                                   height: lineHeight)
+                let exactX = originX + positions[glyph].x
+                let (wholeDevice, bucket) = GlyphRaster.quantise(devicePosition: exactX * deviceScale)
+                let tileLeftDevice = wholeDevice - padding
+                let tileWidthDevice = (advances[glyph].width * deviceScale).rounded(.up) + padding * 2
+
                 slots.append(CharacterSlot(
                     character: character,
-                    frame: frame,
+                    frame: CGRect(x: tileLeftDevice / deviceScale,
+                                  y: tileBottomDevice / deviceScale,
+                                  width: tileWidthDevice / deviceScale,
+                                  height: tileHeightDevice / deviceScale),
+                    inkFrame: CGRect(x: exactX,
+                                     y: originY,
+                                     width: advances[glyph].width,
+                                     height: lineHeight),
+                    phaseBucket: bucket,
+                    baseline: (baselineDevice - tileBottomDevice) / deviceScale,
+                    inset: padding / deviceScale,
                     isWhitespace: character.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 ))
             }

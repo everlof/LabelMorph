@@ -43,7 +43,8 @@ final class MorphingLabelTruncationTests: XCTestCase {
                 for: text,
                 font: font,
                 bounds: label.bounds,
-                alignment: label.alignment
+                alignment: label.alignment,
+                scale: 2
             ).count,
             "the regression needs the truncated and full lines to agree about the count"
         )

@@ -48,6 +48,24 @@ public final class MorphingLabel: NSView {
         }
     }
 
+    /// The colour glyphs are smoothed against.
+    ///
+    /// Font smoothing is the stem-darkening pass macOS applies below 2x, and it
+    /// is most of what separates legible text from grey text on a 1x display. It
+    /// only runs against an opaque ground, and it dilates dark ink on a light one
+    /// while thinning light ink on a dark one — so the ground is not a detail the
+    /// package can guess. A host drawing on a known surface says so here.
+    ///
+    /// Left `nil`, the ink's own luminance decides the polarity, which is right
+    /// far more often than not and wrong only in the gamma.
+    public var rasterizationBackground: NSColor? {
+        didSet {
+            guard rasterizationBackground != oldValue else { return }
+            let background = rasterizationBackground?.cgColor
+            (charLayers + leavingLayers).forEach { $0.rasterBackground = background }
+        }
+    }
+
     /// The strategy used to animate characters. See `MorphPreset` for the
     /// built-in effects, or implement `TextMorphEffect` for custom ones.
     public var effect: TextMorphEffect = CrossfadeEffect()
@@ -111,12 +129,12 @@ public final class MorphingLabel: NSView {
 
     public override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        updateContentsScale()
+        updateForBackingScale()
     }
 
     public override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
-        updateContentsScale()
+        updateForBackingScale()
     }
 
     public override func viewDidChangeEffectiveAppearance() {
@@ -136,10 +154,25 @@ public final class MorphingLabel: NSView {
     var displayedCharacters: [String] {
         charLayers.compactMap { ($0.string as? NSAttributedString)?.string }
     }
-    private var charLayers: [CATextLayer] = []
-    private var leavingLayers: [CATextLayer] = []
+
+    /// Where the visible glyphs' ink actually sits, in the label's coordinates.
+    ///
+    /// Not the glyph layers' frames, which are raster tiles: padded so overhanging
+    /// ink is not clipped, and snapped to the display's pixel grid. A caller
+    /// asking whether a line fits, or aligning something to its last character,
+    /// means these — the boxes Core Text laid the glyphs out in.
+    public var glyphInkFrames: [CGRect] {
+        charLayers.compactMap { $0.slot?.inkFrame }
+    }
+    private var charLayers: [GlyphLayer] = []
+    private var leavingLayers: [GlyphLayer] = []
     private var generation = 0
     private var isResolvingMorphLayout = false
+
+    /// The pixel grid the line is currently laid out against. Slots are snapped to
+    /// it, so it is a layout input rather than a rendering detail — see
+    /// `CharacterLayout.allSlots`.
+    private var backingScale: CGFloat { window?.backingScaleFactor ?? 2 }
 
     /// Truncation is recomputed on every layout pass, and a sidebar full of these lays out
     /// often, so the answer is kept until the text, the width or the font moves.
@@ -187,8 +220,13 @@ public final class MorphingLabel: NSView {
         // on-screen position, so travel to the new layout happens inside the
         // morph animations — otherwise the whole line jumps first and morphs
         // second.
+        // Snapped to the pixel grid the slots were laid out on: the characters
+        // being shifted are already sitting on it, and a fractional shift would
+        // take every one of them off it for the length of the morph.
         let originAfter = convert(NSPoint.zero, to: nil)
-        let shift = NSPoint(x: originBefore.x - originAfter.x, y: originBefore.y - originAfter.y)
+        let scale = backingScale
+        let shift = NSPoint(x: ((originBefore.x - originAfter.x) * scale).rounded() / scale,
+                            y: ((originBefore.y - originAfter.y) * scale).rounded() / scale)
         if shift != .zero {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
@@ -201,11 +239,12 @@ public final class MorphingLabel: NSView {
         // `storedText` is already the new text, so this is the new line as it will be seen —
         // truncated if it has to be. Two names sharing a head morph only where they differ.
         let newSlots = CharacterLayout.visibleSlots(
-            for: displayText(in: bounds), font: font, bounds: bounds, alignment: alignment
+            for: displayText(in: bounds), font: font, bounds: bounds, alignment: alignment,
+            scale: backingScale
         )
         visibleSlots = newSlots
 
-        var newLayers = [CATextLayer?](repeating: nil, count: newSlots.count)
+        var newLayers = [GlyphLayer?](repeating: nil, count: newSlots.count)
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -234,8 +273,8 @@ public final class MorphingLabel: NSView {
 
     /// Classic flow: characters common to both texts fly to their new
     /// position; the rest animate out and in.
-    private func morphByDiff(oldSlots: [CharacterSlot], oldLayers: [CATextLayer],
-                             newSlots: [CharacterSlot], newLayers: inout [CATextLayer?]) {
+    private func morphByDiff(oldSlots: [CharacterSlot], oldLayers: [GlyphLayer],
+                             newSlots: [CharacterSlot], newLayers: inout [GlyphLayer?]) {
         let diff = CharacterDiff.compute(
             old: oldSlots.map(\.character),
             new: newSlots.map(\.character),
@@ -245,7 +284,7 @@ public final class MorphingLabel: NSView {
         for move in diff.moves {
             let layer = oldLayers[move.from]
             let fromPosition = layer.position
-            layer.frame = newSlots[move.to].frame
+            layer.apply(newSlots[move.to])
             newLayers[move.to] = layer
             if fromPosition != layer.position {
                 effect.animateMove(layer, from: fromPosition, to: layer.position,
@@ -274,8 +313,8 @@ public final class MorphingLabel: NSView {
     /// Replacement flow: characters are paired by position and the old glyph
     /// turns into the new one in place.
     private func morphByPosition(_ replacementEffect: TextReplacementMorphEffect,
-                                 oldSlots: [CharacterSlot], oldLayers: [CATextLayer],
-                                 newSlots: [CharacterSlot], newLayers: inout [CATextLayer?]) {
+                                 oldSlots: [CharacterSlot], oldLayers: [GlyphLayer],
+                                 newSlots: [CharacterSlot], newLayers: inout [GlyphLayer?]) {
         guard let container = self.layer else { return }
         let pairCount = min(oldSlots.count, newSlots.count)
 
@@ -284,7 +323,7 @@ public final class MorphingLabel: NSView {
                 let oldLayer = oldLayers[index]
                 if oldSlots[index].character == newSlots[index].character {
                     let fromPosition = oldLayer.position
-                    oldLayer.frame = newSlots[index].frame
+                    oldLayer.apply(newSlots[index])
                     newLayers[index] = oldLayer
                     if fromPosition != oldLayer.position {
                         effect.animateMove(oldLayer, from: fromPosition, to: oldLayer.position,
@@ -333,17 +372,22 @@ public final class MorphingLabel: NSView {
         "foregroundColor": NSNull(),
     ]
 
-    private func makeLayer(for slot: CharacterSlot) -> CATextLayer {
-        let charLayer = CATextLayer()
+    private func makeLayer(for slot: CharacterSlot) -> GlyphLayer {
+        let ink = resolvedTextColor()
+        let charLayer = GlyphLayer()
+        // `string` is not what gets drawn — `GlyphLayer.display` replaces that
+        // wholesale — but it stays authoritative for what the layer *is*, which
+        // `GlyphMorphEffect` and `displayedCharacters` both read.
         charLayer.string = NSAttributedString(
             string: slot.character,
-            attributes: CharacterLayout.textAttributes(font: font, color: resolvedTextColor())
+            attributes: CharacterLayout.textAttributes(font: font, color: ink)
         )
-        charLayer.frame = slot.frame
-        charLayer.contentsScale = window?.backingScaleFactor ?? 2
-        charLayer.isWrapped = false
-        charLayer.truncationMode = .none
+        charLayer.glyphFont = font
+        charLayer.ink = ink
+        charLayer.rasterBackground = rasterizationBackground?.cgColor
+        charLayer.contentsScale = backingScale
         charLayer.actions = Self.disabledActions
+        charLayer.apply(slot)
         return charLayer
     }
 
@@ -355,7 +399,8 @@ public final class MorphingLabel: NSView {
         purgeTransientLayers()
 
         visibleSlots = CharacterLayout.visibleSlots(
-            for: displayText(in: bounds), font: font, bounds: bounds, alignment: alignment
+            for: displayText(in: bounds), font: font, bounds: bounds, alignment: alignment,
+            scale: backingScale
         )
 
         CATransaction.begin()
@@ -379,7 +424,8 @@ public final class MorphingLabel: NSView {
         // restored is eight slots either way, and a count guard repositioned the stale "…"
         // where the emoji belonged — forever, since every later pass agreed about the count.
         let slots = CharacterLayout.visibleSlots(
-            for: displayText(in: bounds), font: font, bounds: bounds, alignment: alignment
+            for: displayText(in: bounds), font: font, bounds: bounds, alignment: alignment,
+            scale: backingScale
         )
         guard slots.count == charLayers.count,
               zip(slots, visibleSlots).allSatisfy({ $0.character == $1.character }) else {
@@ -391,7 +437,7 @@ public final class MorphingLabel: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         for (charLayer, slot) in zip(charLayers, slots) {
-            charLayer.frame = slot.frame
+            charLayer.apply(slot)
         }
         CATransaction.commit()
     }
@@ -404,10 +450,21 @@ public final class MorphingLabel: NSView {
             .forEach { $0.removeFromSuperlayer() }
     }
 
-    private func updateContentsScale() {
-        let scale = window?.backingScaleFactor ?? 2
-        (charLayers + leavingLayers).forEach { $0.contentsScale = scale }
+    /// Re-lays out and re-rasterises the line for the display it is now on.
+    ///
+    /// A retag of `contentsScale` was enough while glyphs were drawn by
+    /// `CATextLayer`, which re-renders itself when its scale changes. A bitmap
+    /// does not: dragging the window from a Retina screen to a 1x one would leave
+    /// every glyph a 2x tile for the compositor to halve, which is softer than
+    /// what it replaced. The slots are scale-dependent too — they are snapped to
+    /// the pixel grid — so this is a full rebuild rather than a repaint.
+    private func updateForBackingScale() {
+        guard lastRasterizedScale != backingScale else { return }
+        lastRasterizedScale = backingScale
+        rebuild()
     }
+
+    private var lastRasterizedScale: CGFloat?
 
     /// Resolves semantic and custom dynamic colours in this view's effective
     /// appearance before storing them in Core Animation's non-dynamic CGColor.
@@ -428,6 +485,9 @@ public final class MorphingLabel: NSView {
         CATransaction.setDisableActions(true)
 
         for textLayer in charLayers + leavingLayers {
+            // The tile is re-tinted from the cached mask rather than rasterised
+            // again, so a live theme switch costs a blit per glyph.
+            textLayer.ink = color
             guard let attributed = textLayer.string as? NSAttributedString else { continue }
             let recolored = NSMutableAttributedString(attributedString: attributed)
             recolored.addAttribute(
