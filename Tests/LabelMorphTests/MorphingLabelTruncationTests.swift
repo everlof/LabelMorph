@@ -70,4 +70,86 @@ final class MorphingLabelTruncationTests: XCTestCase {
 
         XCTAssertEqual(label.displayedCharacters.last, CharacterLayout.ellipsis)
     }
+
+    /// A leading line's glyph positions do not depend on spare width. Re-invalidating every
+    /// glyph raster while a sidebar divider moves is both expensive and visually redundant.
+    func testLeadingLineKeepsItsGlyphRastersWhenOnlySpareWidthChanges() throws {
+        let text = "A title that already fits"
+        let fullWidth = ceil(CharacterLayout.measure(text, font: font).width)
+        let label = makeLabel(text, width: fullWidth + 20)
+        label.alignment = .left
+        label.layout()
+
+        let glyphs = try XCTUnwrap(label.layer?.sublayers?.compactMap { $0 as? GlyphLayer })
+        glyphs.forEach { $0.displayIfNeeded() }
+        XCTAssertTrue(glyphs.allSatisfy { !$0.needsDisplay() })
+
+        label.frame.size.width += 40
+        label.layout()
+
+        XCTAssertTrue(
+            glyphs.allSatisfy { !$0.needsDisplay() },
+            "spare leading-line width invalidated glyphs whose pixels and positions did not move"
+        )
+    }
+
+    /// Crossing a tail-truncation boundary changes only the suffix. Rebuilding the common
+    /// prefix made every character in every visible sidebar title rerasterize per divider tick.
+    func testTruncationChangeReusesTheUnchangedGlyphPrefix() throws {
+        let text = "A title with a deliberately long tail"
+        let label = makeLabel(text, width: 110)
+        label.alignment = .left
+        label.layout()
+        let originalGlyphs = try XCTUnwrap(
+            label.layer?.sublayers?.compactMap { $0 as? GlyphLayer }
+        )
+        let originalFirst = try XCTUnwrap(originalGlyphs.first)
+        let originalCharacters = label.displayedCharacters
+
+        label.frame.size.width += 12
+        label.layout()
+
+        let widenedGlyphs = try XCTUnwrap(
+            label.layer?.sublayers?.compactMap { $0 as? GlyphLayer }
+        )
+        XCTAssertNotEqual(label.displayedCharacters, originalCharacters)
+        XCTAssertTrue(
+            widenedGlyphs.first === originalFirst,
+            "a changed tail rebuilt the unchanged leading glyph"
+        )
+    }
+
+    /// Width is presentation geometry for centered and trailing lines, so the leading-line
+    /// optimization must not freeze either alignment in place.
+    func testNonLeadingAlignmentStillMovesWithWidth() {
+        for alignment in [NSTextAlignment.center, .right] {
+            let label = makeLabel("Moving title", width: 180)
+            label.alignment = alignment
+            label.layout()
+            let originalX = label.glyphInkFrames.first?.minX
+
+            label.frame.size.width += 40
+            label.layout()
+
+            XCTAssertNotEqual(
+                label.glyphInkFrames.first?.minX,
+                originalX,
+                "\(alignment) alignment did not follow its changed width"
+            )
+        }
+    }
+
+    /// Vertical centering is shared by every alignment; a height change still moves a leading
+    /// line even though an ordinary sidebar-width change does not.
+    func testLeadingLineStillMovesWithHeight() {
+        let label = makeLabel("Moving title", width: 180)
+        label.alignment = .left
+        label.layout()
+        let originalY = label.glyphInkFrames.first?.minY
+
+        label.frame.size.height += 20
+        label.layout()
+
+        XCTAssertNotEqual(label.glyphInkFrames.first?.minY, originalY)
+    }
 }

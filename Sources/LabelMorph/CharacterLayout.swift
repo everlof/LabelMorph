@@ -2,7 +2,7 @@ import AppKit
 import CoreText
 
 /// The position of a single character (glyph cluster) within a laid-out line.
-struct CharacterSlot {
+struct CharacterSlot: Equatable {
     let character: String
     /// The layer's frame: the typographic box padded for ink that overhangs it,
     /// then snapped outwards to whole device pixels so the tile it carries is

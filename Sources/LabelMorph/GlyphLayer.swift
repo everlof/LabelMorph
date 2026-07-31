@@ -78,10 +78,19 @@ final class GlyphLayer: CATextLayer {
     /// phase its raster was cached under — they are one decision and must not be
     /// assigned separately.
     func apply(_ slot: CharacterSlot) {
+        guard slot != self.slot else { return }
+
+        let rasterChanged = self.slot.map {
+            $0.character != slot.character
+                || $0.frame.size != slot.frame.size
+                || $0.phaseBucket != slot.phaseBucket
+                || $0.baseline != slot.baseline
+                || $0.inset != slot.inset
+        } ?? true
         let framed = frame != slot.frame
         self.slot = slot
         if framed { frame = slot.frame }
-        setNeedsDisplay()
+        if rasterChanged { setNeedsDisplay() }
     }
 
     // MARK: - CALayer

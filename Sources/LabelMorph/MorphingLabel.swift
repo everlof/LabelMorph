@@ -169,6 +169,22 @@ public final class MorphingLabel: NSView {
     private var generation = 0
     private var isResolvingMorphLayout = false
 
+    /// The geometry the current glyph slots were resolved against.
+    ///
+    /// A leading-aligned line does not move when only its available width changes. Width can
+    /// still change the string tail truncation chooses, so the displayed text is part of the
+    /// snapshot; once that agrees, repeating Core Text layout and invalidating every glyph
+    /// raster is work with no visible result. Centered and trailing lines continue to include
+    /// width because their origin genuinely moves with it.
+    private var layoutSnapshot: LayoutSnapshot?
+
+    private struct LayoutSnapshot {
+        let displayedText: String
+        let bounds: CGRect
+        let alignment: NSTextAlignment
+        let scale: CGFloat
+    }
+
     /// The pixel grid the line is currently laid out against. Slots are snapped to
     /// it, so it is a layout input rather than a rendering detail — see
     /// `CharacterLayout.allSlots`.
@@ -238,8 +254,9 @@ public final class MorphingLabel: NSView {
 
         // `storedText` is already the new text, so this is the new line as it will be seen —
         // truncated if it has to be. Two names sharing a head morph only where they differ.
+        let displayedText = displayText(in: bounds)
         let newSlots = CharacterLayout.visibleSlots(
-            for: displayText(in: bounds), font: font, bounds: bounds, alignment: alignment,
+            for: displayedText, font: font, bounds: bounds, alignment: alignment,
             scale: backingScale
         )
         visibleSlots = newSlots
@@ -260,6 +277,7 @@ public final class MorphingLabel: NSView {
         CATransaction.commit()
 
         charLayers = newLayers.compactMap { $0 }
+        rememberLayout(of: displayedText)
 
         let cleanupDelay = timing.duration
             + timing.stagger * CFTimeInterval(max(oldSlots.count, newSlots.count))
@@ -398,8 +416,9 @@ public final class MorphingLabel: NSView {
         leavingLayers.removeAll()
         purgeTransientLayers()
 
+        let displayedText = displayText(in: bounds)
         visibleSlots = CharacterLayout.visibleSlots(
-            for: displayText(in: bounds), font: font, bounds: bounds, alignment: alignment,
+            for: displayedText, font: font, bounds: bounds, alignment: alignment,
             scale: backingScale
         )
 
@@ -411,6 +430,7 @@ public final class MorphingLabel: NSView {
             return charLayer
         }
         CATransaction.commit()
+        rememberLayout(of: displayedText)
 
         invalidateIntrinsicContentSize()
     }
@@ -423,23 +443,60 @@ public final class MorphingLabel: NSView {
         // drops exactly one character replaces it with the ellipsis, so "hi 😂" shortened and
         // restored is eight slots either way, and a count guard repositioned the stale "…"
         // where the emoji belonged — forever, since every later pass agreed about the count.
+        let displayedText = displayText(in: bounds)
+        guard needsLayout(for: displayedText) else { return }
+
         let slots = CharacterLayout.visibleSlots(
-            for: displayText(in: bounds), font: font, bounds: bounds, alignment: alignment,
+            for: displayedText, font: font, bounds: bounds, alignment: alignment,
             scale: backingScale
         )
-        guard slots.count == charLayers.count,
-              zip(slots, visibleSlots).allSatisfy({ $0.character == $1.character }) else {
-            rebuild()
-            return
-        }
-        visibleSlots = slots
+        let commonPrefixCount = zip(slots, visibleSlots)
+            .prefix { $0.character == $1.character }
+            .count
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        for (charLayer, slot) in zip(charLayers, slots) {
-            charLayer.apply(slot)
+        for index in 0..<commonPrefixCount {
+            charLayers[index].apply(slots[index])
         }
+
+        charLayers.dropFirst(commonPrefixCount).forEach { $0.removeFromSuperlayer() }
+        let replacementLayers = slots.dropFirst(commonPrefixCount).map { slot in
+            let charLayer = makeLayer(for: slot)
+            layer?.addSublayer(charLayer)
+            return charLayer
+        }
+        charLayers = Array(charLayers.prefix(commonPrefixCount)) + replacementLayers
+        visibleSlots = slots
         CATransaction.commit()
+        rememberLayout(of: displayedText)
+    }
+
+    /// Whether the current glyph slots can still describe this presentation exactly.
+    private func needsLayout(for displayedText: String) -> Bool {
+        guard let layoutSnapshot,
+              layoutSnapshot.displayedText == displayedText,
+              layoutSnapshot.alignment == alignment,
+              layoutSnapshot.scale == backingScale else {
+            return true
+        }
+
+        switch alignment {
+        case .center, .right:
+            return layoutSnapshot.bounds != bounds
+        default:
+            return layoutSnapshot.bounds.origin != bounds.origin
+                || layoutSnapshot.bounds.height != bounds.height
+        }
+    }
+
+    private func rememberLayout(of displayedText: String) {
+        layoutSnapshot = LayoutSnapshot(
+            displayedText: displayedText,
+            bounds: bounds,
+            alignment: alignment,
+            scale: backingScale
+        )
     }
 
     /// Removes temporary overlay layers effects may have added (see
