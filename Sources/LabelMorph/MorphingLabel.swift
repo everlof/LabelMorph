@@ -19,6 +19,14 @@ public final class MorphingLabel: NSView {
         didSet {
             guard font != oldValue else { return }
             truncationCache = nil
+            // A host configures an empty label before giving it its first title. Rebuilding here
+            // tears down and lays out an empty layer tree once per property, only for `setText`
+            // to build the real glyphs a moment later. Keep the final configuration and let the
+            // first non-empty text perform the one useful build.
+            guard hasPresentedContent else {
+                invalidateIntrinsicContentSize()
+                return
+            }
             rebuild()
         }
     }
@@ -30,6 +38,7 @@ public final class MorphingLabel: NSView {
         didSet {
             guard truncation != oldValue else { return }
             truncationCache = nil
+            guard hasPresentedContent else { return }
             rebuild()
         }
     }
@@ -44,6 +53,7 @@ public final class MorphingLabel: NSView {
     public var alignment: NSTextAlignment = .center {
         didSet {
             guard alignment != oldValue else { return }
+            guard hasPresentedContent else { return }
             relayoutCurrent()
         }
     }
@@ -168,6 +178,13 @@ public final class MorphingLabel: NSView {
     private var leavingLayers: [GlyphLayer] = []
     private var generation = 0
     private var isResolvingMorphLayout = false
+
+    /// Empty pre-presentation configuration has no glyph tree to rebuild. Include outgoing
+    /// layers so clearing a label during an animation still lets a later presentation change
+    /// settle the pixels that are genuinely on screen.
+    private var hasPresentedContent: Bool {
+        !storedText.isEmpty || !charLayers.isEmpty || !leavingLayers.isEmpty
+    }
 
     /// The geometry the current glyph slots were resolved against.
     ///
