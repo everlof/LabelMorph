@@ -508,12 +508,19 @@ public final class MorphingLabel: NSView {
     }
 
     private func rememberLayout(of displayedText: String) {
+        let scale = backingScale
         layoutSnapshot = LayoutSnapshot(
             displayedText: displayedText,
             bounds: bounds,
             alignment: alignment,
-            scale: backingScale
+            scale: scale
         )
+        // Every caller has just laid out or rebuilt the glyph rasters at this scale. Remember
+        // that fact here, at the same boundary as the geometry snapshot, so attaching a label
+        // that was prepared off-window to a display with the same scale does not rebuild an
+        // identical layer tree. A genuinely different display scale still crosses the guard in
+        // `updateForBackingScale` and performs the required rerasterization.
+        lastRasterizedScale = scale
     }
 
     /// Removes temporary overlay layers effects may have added (see

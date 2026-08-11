@@ -152,4 +152,26 @@ final class MorphingLabelTruncationTests: XCTestCase {
 
         XCTAssertNotEqual(label.glyphInkFrames.first?.minY, originalY)
     }
+
+    /// Sidebar titles are filled before their outline rows enter a window. Off-window layout
+    /// uses the same 2x fallback as the usual Retina host, so attachment must retain those
+    /// already-correct rasters rather than tearing down and rebuilding every character.
+    func testMovingToAnEqualScaleKeepsThePreparedGlyphTree() throws {
+        let label = makeLabel("Prepared off-window", width: 180)
+        let prepared = try XCTUnwrap(
+            label.layer?.sublayers?.compactMap { $0 as? GlyphLayer }
+        )
+        XCTAssertFalse(prepared.isEmpty)
+
+        label.viewDidMoveToWindow()
+
+        let attached = try XCTUnwrap(
+            label.layer?.sublayers?.compactMap { $0 as? GlyphLayer }
+        )
+        XCTAssertEqual(attached.count, prepared.count)
+        XCTAssertTrue(
+            zip(attached, prepared).allSatisfy { $0 === $1 },
+            "an unchanged backing scale rebuilt the prepared glyph rasters"
+        )
+    }
 }
