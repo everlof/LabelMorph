@@ -21,4 +21,15 @@ public extension MorphingLabel {
         let shortened = CharacterLayout.tailTruncated(text, font: font, width: available)
         return CharacterLayout.measure(shortened, font: font).width
     }
+
+    /// What `intrinsicContentSize` would report for a string this label does not hold yet.
+    ///
+    /// For a host that has to resize **before** a morph rather than because of one. A morph is
+    /// built against the bounds the text will settle in, so a host holding several of these —
+    /// a block of lines sharing one width — has to know where they are all going before the
+    /// first one starts moving. Measured after the fact, the width arrives mid-animation and
+    /// every line re-lays out under its own glyphs.
+    func naturalWidth(of candidate: String) -> CGFloat {
+        ceil(CharacterLayout.measure(candidate, font: font).width)
+    }
 }
