@@ -1,4 +1,8 @@
+#if canImport(AppKit)
 import AppKit
+#elseif canImport(UIKit)
+import UIKit
+#endif
 import QuartzCore
 
 /// The layer one character is drawn into.
@@ -19,7 +23,7 @@ final class GlyphLayer: CATextLayer {
     /// The face the glyph is rasterised in. `CATextLayer` already has a `font`,
     /// typed `CFTypeRef?` and consulted only by the rendering this class
     /// replaces, so ours needs its own name.
-    var glyphFont: NSFont = .systemFont(ofSize: 13) {
+    var glyphFont: MorphFont = .systemFont(ofSize: 13) {
         didSet {
             guard glyphFont != oldValue else { return }
             setNeedsDisplay()
@@ -28,7 +32,7 @@ final class GlyphLayer: CATextLayer {
 
     /// The glyph's colour. Also written into `string` by the label so that
     /// `GlyphMorphEffect` can style its stand-in shape from the same source.
-    var ink: CGColor = NSColor.labelColor.cgColor {
+    var ink: CGColor = MorphColor.morphLabelColor.cgColor {
         didSet {
             guard ink != oldValue else { return }
             setNeedsDisplay()

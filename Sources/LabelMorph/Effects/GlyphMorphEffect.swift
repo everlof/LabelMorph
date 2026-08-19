@@ -1,4 +1,4 @@
-import AppKit
+import CoreText
 import QuartzCore
 
 /// The old glyph's outline is broken into contours and morphed into the new
@@ -126,6 +126,6 @@ public final class GlyphMorphEffect: TextReplacementMorphEffect {
                at: 0, effectiveRange: nil) {
             return color as! CGColor
         }
-        return NSColor.labelColor.cgColor
+        return MorphColor.morphLabelColor.cgColor
     }
 }

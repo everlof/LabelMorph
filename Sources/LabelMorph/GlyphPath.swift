@@ -1,4 +1,4 @@
-import AppKit
+import Foundation
 import CoreText
 
 /// Extracts glyph outlines and prepares structurally identical path pairs so
@@ -19,7 +19,14 @@ enum GlyphPath {
         var descent: CGFloat = 0
         var leading: CGFloat = 0
         _ = CTLineGetTypographicBounds(line, &ascent, &descent, &leading)
-        let baseline = CGPoint(x: frame.minX, y: frame.minY + descent)
+        let baseline: CGPoint
+#if canImport(AppKit)
+        baseline = CGPoint(x: frame.minX, y: frame.minY + descent)
+#else
+        // Core Text glyph outlines are y-up. UIKit layers are y-down, so their baseline is
+        // measured from the slot's bottom and the outline is reflected across it.
+        baseline = CGPoint(x: frame.minX, y: frame.maxY - descent)
+#endif
 
         let result = CGMutablePath()
         let runs = CTLineGetGlyphRuns(line) as! [CTRun]
@@ -39,8 +46,22 @@ enum GlyphPath {
 
             for index in 0..<glyphCount {
                 guard let outline = CTFontCreatePathForGlyph(runFont, glyphs[index], nil) else { continue }
-                let transform = CGAffineTransform(translationX: baseline.x + positions[index].x,
-                                                  y: baseline.y + positions[index].y)
+                let transform: CGAffineTransform
+#if canImport(AppKit)
+                transform = CGAffineTransform(
+                    translationX: baseline.x + positions[index].x,
+                    y: baseline.y + positions[index].y
+                )
+#else
+                transform = CGAffineTransform(
+                    a: 1,
+                    b: 0,
+                    c: 0,
+                    d: -1,
+                    tx: baseline.x + positions[index].x,
+                    ty: baseline.y - positions[index].y
+                )
+#endif
                 result.addPath(outline, transform: transform)
             }
         }

@@ -1,4 +1,3 @@
-import AppKit
 import QuartzCore
 
 /// New characters pop in one at a time, front to back; old characters are

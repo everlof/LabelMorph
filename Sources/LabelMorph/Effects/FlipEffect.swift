@@ -1,4 +1,3 @@
-import AppKit
 import QuartzCore
 
 /// Characters flip around their horizontal axis, like a split-flap display.

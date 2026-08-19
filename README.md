@@ -1,6 +1,6 @@
 # LabelMorph
 
-An AppKit framework for morphing text on a label, character by character.
+An AppKit and UIKit framework for morphing text on a label, character by character.
 
 ![Shape Morph](Docs/shapemorph.gif)
 
@@ -18,7 +18,11 @@ import LabelMorph
 
 let label = MorphingLabel()
 label.font = .systemFont(ofSize: 48, weight: .semibold)
+#if os(macOS)
 label.textColor = .labelColor
+#else
+label.textColor = .label
+#endif
 label.effect = MorphPreset.shapeMorph.makeEffect(intensity: 0.7)
 label.timing = MorphTiming(duration: 0.55, stagger: 0.045)
 
@@ -30,9 +34,10 @@ label.setText("Goodbye!", animated: false)
 per-character start delay, so a whole morph takes roughly
 `duration + stagger × (characters − 1)`.
 
-`textColor` accepts ordinary, semantic, and custom dynamic `NSColor` values.
+`textColor` accepts ordinary, semantic, and custom dynamic `NSColor`/`UIColor` values.
 Visible glyphs and an in-flight Shape Morph update automatically when the
-label's effective appearance changes.
+label's effective appearance changes. Core Text outlines are converted to the
+native coordinate direction on each platform, so Shape Morph stays upright on UIKit.
 
 ## Installation
 
@@ -123,7 +128,8 @@ a head animate only where they actually differ.
 ## Notes / limitations
 
 - Single-line text only (no wrapping); left-to-right scripts.
-- Requires macOS 13+.
+- Blur uses Core Image on AppKit and falls back to its opacity transition on UIKit.
+- Requires macOS 13+ or iOS 17+.
 
 ## License
 

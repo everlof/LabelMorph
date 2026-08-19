@@ -1,4 +1,8 @@
+#if canImport(AppKit)
 import AppKit
+#elseif canImport(UIKit)
+import UIKit
+#endif
 import QuartzCore
 
 /// A single-line label that animates text changes character by character.
@@ -7,7 +11,7 @@ import QuartzCore
 /// strings: characters present in both fly to their new position, removed
 /// characters animate out, and added characters animate in — all according to
 /// the current `effect` and `timing`.
-public final class MorphingLabel: NSView {
+public final class MorphingLabel: MorphView {
 
     // MARK: - Public API
 
@@ -15,7 +19,7 @@ public final class MorphingLabel: NSView {
     // reconfigures a reused view restates all of them on every pass. Assigning the value
     // already in force must therefore cost nothing.
 
-    public var font: NSFont = .systemFont(ofSize: 48, weight: .semibold) {
+    public var font: MorphFont = .systemFont(ofSize: 48, weight: .semibold) {
         didSet {
             guard font != oldValue else { return }
             truncationCache = nil
@@ -43,7 +47,7 @@ public final class MorphingLabel: NSView {
         }
     }
 
-    public var textColor: NSColor = .labelColor {
+    public var textColor: MorphColor = .morphLabelColor {
         didSet {
             guard textColor != oldValue else { return }
             updateTextColors()
@@ -68,7 +72,7 @@ public final class MorphingLabel: NSView {
     ///
     /// Left `nil`, the ink's own luminance decides the polarity, which is right
     /// far more often than not and wrong only in the gamma.
-    public var rasterizationBackground: NSColor? {
+    public var rasterizationBackground: MorphColor? {
         didSet {
             guard rasterizationBackground != oldValue else { return }
             let background = rasterizationBackground?.cgColor
@@ -104,7 +108,7 @@ public final class MorphingLabel: NSView {
 
     // MARK: - Setup
 
-    public override init(frame frameRect: NSRect) {
+    public override init(frame frameRect: CGRect) {
         super.init(frame: frameRect)
         commonInit()
     }
@@ -115,21 +119,33 @@ public final class MorphingLabel: NSView {
     }
 
     private func commonInit() {
+#if canImport(AppKit)
         wantsLayer = true
         layerUsesCoreImageFilters = true
+#else
+        registerForTraitChanges([UITraitDisplayScale.self]) {
+            (label: MorphingLabel, _) in
+            label.updateForBackingScale()
+        }
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) {
+            (label: MorphingLabel, _) in
+            label.updateTextColors()
+        }
+#endif
         // Perspective for 3D effects such as flip.
         var transform = CATransform3DIdentity
         transform.m34 = -1.0 / 600.0
-        layer?.sublayerTransform = transform
+        morphLayer?.sublayerTransform = transform
     }
 
-    // MARK: - NSView
+    // MARK: - Platform view
 
-    public override var intrinsicContentSize: NSSize {
+    public override var intrinsicContentSize: CGSize {
         let size = CharacterLayout.measure(storedText, font: font)
-        return NSSize(width: ceil(size.width), height: ceil(size.height))
+        return CGSize(width: ceil(size.width), height: ceil(size.height))
     }
 
+#if canImport(AppKit)
     public override func layout() {
         super.layout()
         if !isResolvingMorphLayout {
@@ -151,6 +167,19 @@ public final class MorphingLabel: NSView {
         super.viewDidChangeEffectiveAppearance()
         updateTextColors()
     }
+#elseif canImport(UIKit)
+    public override func layoutSubviews() {
+        super.layoutSubviews()
+        if !isResolvingMorphLayout {
+            relayoutCurrent()
+        }
+    }
+
+    public override func didMoveToWindow() {
+        super.didMoveToWindow()
+        updateForBackingScale()
+    }
+#endif
 
     // MARK: - Morphing
 
@@ -179,6 +208,11 @@ public final class MorphingLabel: NSView {
     private var generation = 0
     private var isResolvingMorphLayout = false
 
+    /// AppKit creates a backing layer only after `wantsLayer`; UIKit always has one. Keeping the
+    /// optional shape here lets the shared engine retain AppKit's lifecycle without forking all
+    /// layer management for UIKit.
+    private var morphLayer: CALayer? { layer }
+
     /// Empty pre-presentation configuration has no glyph tree to rebuild. Include outgoing
     /// layers so clearing a label during an animation still lets a later presentation change
     /// settle the pixels that are genuinely on screen.
@@ -205,7 +239,13 @@ public final class MorphingLabel: NSView {
     /// The pixel grid the line is currently laid out against. Slots are snapped to
     /// it, so it is a layout input rather than a rendering detail — see
     /// `CharacterLayout.allSlots`.
-    private var backingScale: CGFloat { window?.backingScaleFactor ?? 2 }
+    private var backingScale: CGFloat {
+#if canImport(AppKit)
+        window?.backingScaleFactor ?? 2
+#else
+        window?.screen.scale ?? traitCollection.displayScale
+#endif
+    }
 
     /// Truncation is recomputed on every layout pass, and a sidebar full of these lays out
     /// often, so the answer is kept until the text, the width or the font moves.
@@ -242,7 +282,7 @@ public final class MorphingLabel: NSView {
 
         // Resolve the label's final geometry now, so every animation is built
         // against the bounds the text will actually settle in.
-        let originBefore = convert(NSPoint.zero, to: nil)
+        let originBefore = convert(CGPoint.zero, to: nil)
         isResolvingMorphLayout = true
         invalidateIntrinsicContentSize()
         window?.layoutIfNeeded()
@@ -256,9 +296,9 @@ public final class MorphingLabel: NSView {
         // Snapped to the pixel grid the slots were laid out on: the characters
         // being shifted are already sitting on it, and a fractional shift would
         // take every one of them off it for the length of the morph.
-        let originAfter = convert(NSPoint.zero, to: nil)
+        let originAfter = convert(CGPoint.zero, to: nil)
         let scale = backingScale
-        let shift = NSPoint(x: ((originBefore.x - originAfter.x) * scale).rounded() / scale,
+        let shift = CGPoint(x: ((originBefore.x - originAfter.x) * scale).rounded() / scale,
                             y: ((originBefore.y - originAfter.y) * scale).rounded() / scale)
         if shift != .zero {
             CATransaction.begin()
@@ -329,7 +369,7 @@ public final class MorphingLabel: NSView {
 
         for index in diff.insertions {
             let charLayer = makeLayer(for: newSlots[index])
-            layer?.addSublayer(charLayer)
+            morphLayer?.addSublayer(charLayer)
             newLayers[index] = charLayer
             effect.animateIn(charLayer, context: context(index: index, count: newSlots.count))
         }
@@ -350,7 +390,7 @@ public final class MorphingLabel: NSView {
     private func morphByPosition(_ replacementEffect: TextReplacementMorphEffect,
                                  oldSlots: [CharacterSlot], oldLayers: [GlyphLayer],
                                  newSlots: [CharacterSlot], newLayers: inout [GlyphLayer?]) {
-        guard let container = self.layer else { return }
+        guard let container = morphLayer else { return }
         let pairCount = min(oldSlots.count, newSlots.count)
 
         for index in 0..<newSlots.count {
@@ -443,7 +483,7 @@ public final class MorphingLabel: NSView {
         CATransaction.setDisableActions(true)
         charLayers = visibleSlots.map { slot in
             let charLayer = makeLayer(for: slot)
-            layer?.addSublayer(charLayer)
+            morphLayer?.addSublayer(charLayer)
             return charLayer
         }
         CATransaction.commit()
@@ -480,7 +520,7 @@ public final class MorphingLabel: NSView {
         charLayers.dropFirst(commonPrefixCount).forEach { $0.removeFromSuperlayer() }
         let replacementLayers = slots.dropFirst(commonPrefixCount).map { slot in
             let charLayer = makeLayer(for: slot)
-            layer?.addSublayer(charLayer)
+            morphLayer?.addSublayer(charLayer)
             return charLayer
         }
         charLayers = Array(charLayers.prefix(commonPrefixCount)) + replacementLayers
@@ -526,7 +566,7 @@ public final class MorphingLabel: NSView {
     /// Removes temporary overlay layers effects may have added (see
     /// `MorphTransientLayer`).
     private func purgeTransientLayers() {
-        layer?.sublayers?
+        morphLayer?.sublayers?
             .filter { $0.name == MorphTransientLayer.name }
             .forEach { $0.removeFromSuperlayer() }
     }
@@ -550,11 +590,15 @@ public final class MorphingLabel: NSView {
     /// Resolves semantic and custom dynamic colours in this view's effective
     /// appearance before storing them in Core Animation's non-dynamic CGColor.
     private func resolvedTextColor() -> CGColor {
+#if canImport(AppKit)
         var resolved = textColor.cgColor
         effectiveAppearance.performAsCurrentDrawingAppearance {
             resolved = textColor.cgColor
         }
         return resolved
+#else
+        textColor.resolvedColor(with: traitCollection).cgColor
+#endif
     }
 
     /// Updates existing model layers in place so an appearance switch does not
@@ -579,7 +623,7 @@ public final class MorphingLabel: NSView {
             textLayer.string = recolored
         }
 
-        layer?.sublayers?
+        morphLayer?.sublayers?
             .compactMap { $0 as? CAShapeLayer }
             .filter { $0.name == MorphTransientLayer.name }
             .forEach { $0.fillColor = color }

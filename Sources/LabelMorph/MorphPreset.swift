@@ -1,4 +1,3 @@
-import AppKit
 import QuartzCore
 
 /// The built-in morph effects, with factory methods that map a single

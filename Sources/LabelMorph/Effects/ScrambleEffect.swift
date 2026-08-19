@@ -1,4 +1,3 @@
-import AppKit
 import QuartzCore
 
 /// Characters cycle through random glyphs before settling on the final text,

@@ -1,4 +1,4 @@
-import AppKit
+import CoreGraphics
 
 public extension MorphingLabel {
 

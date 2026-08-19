@@ -1,4 +1,8 @@
+#if canImport(AppKit)
 import AppKit
+#elseif canImport(UIKit)
+import UIKit
+#endif
 import CoreText
 
 /// The position of a single character (glyph cluster) within a laid-out line.
@@ -32,7 +36,7 @@ enum CharacterLayout {
     /// periods, so it occupies one slot and morphs as one thing.
     static let ellipsis = "\u{2026}"
 
-    static func textAttributes(font: NSFont, color: CGColor? = nil) -> [NSAttributedString.Key: Any] {
+    static func textAttributes(font: MorphFont, color: CGColor? = nil) -> [NSAttributedString.Key: Any] {
         var attributes: [NSAttributedString.Key: Any] = [
             .font: font,
             .ligature: 0,
@@ -43,7 +47,7 @@ enum CharacterLayout {
         return attributes
     }
 
-    static func measure(_ text: String, font: NSFont) -> CGSize {
+    static func measure(_ text: String, font: MorphFont) -> CGSize {
         var ascent: CGFloat = 0
         var descent: CGFloat = 0
         var leading: CGFloat = 0
@@ -63,7 +67,7 @@ enum CharacterLayout {
     /// against an ellipsis that is not in the line yet, so the candidate is measured and
     /// stepped back by whole composed characters until it genuinely fits — normally not at
     /// all, and never far.
-    static func tailTruncated(_ text: String, font: NSFont, width: CGFloat) -> String {
+    static func tailTruncated(_ text: String, font: MorphFont, width: CGFloat) -> String {
         guard width > 0 else { return "" }
         guard measure(text, font: font).width > width else { return text }
 
@@ -99,7 +103,7 @@ enum CharacterLayout {
     /// All slots except whitespace, in visual order. Whitespace still affects
     /// the position of surrounding characters but gets no layer of its own.
     static func visibleSlots(for text: String,
-                             font: NSFont,
+                             font: MorphFont,
                              bounds: CGRect,
                              alignment: NSTextAlignment,
                              scale: CGFloat) -> [CharacterSlot] {
@@ -112,7 +116,7 @@ enum CharacterLayout {
     ///   display's pixel grid, so slots computed for one screen are wrong on
     ///   another and the label recomputes them when it moves.
     static func allSlots(for text: String,
-                         font: NSFont,
+                         font: MorphFont,
                          bounds: CGRect,
                          alignment: NSTextAlignment,
                          scale: CGFloat) -> [CharacterSlot] {
@@ -195,7 +199,7 @@ enum CharacterLayout {
         return slots
     }
 
-    private static func makeLine(_ text: String, font: NSFont) -> CTLine {
+    private static func makeLine(_ text: String, font: MorphFont) -> CTLine {
         let attributed = NSAttributedString(string: text, attributes: textAttributes(font: font))
         return CTLineCreateWithAttributedString(attributed)
     }

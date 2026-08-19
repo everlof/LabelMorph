@@ -1,4 +1,3 @@
-import AppKit
 import QuartzCore
 
 /// New characters drop in from above with a slight tilt and land with a

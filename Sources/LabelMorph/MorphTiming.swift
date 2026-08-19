@@ -1,4 +1,4 @@
-import AppKit
+import Foundation
 import QuartzCore
 
 /// Timing configuration shared by all morph effects.
@@ -32,9 +32,9 @@ public struct MorphContext {
     public let count: Int
 
     public let timing: MorphTiming
-    public let font: NSFont
+    public let font: MorphFont
 
-    public init(index: Int, count: Int, timing: MorphTiming, font: NSFont) {
+    public init(index: Int, count: Int, timing: MorphTiming, font: MorphFont) {
         self.index = index
         self.count = count
         self.timing = timing

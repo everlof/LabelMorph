@@ -1,4 +1,3 @@
-import AppKit
 import QuartzCore
 
 /// Old characters fade out while new ones fade in.

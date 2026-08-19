@@ -1,4 +1,8 @@
+#if canImport(AppKit)
 import AppKit
+#elseif canImport(UIKit)
+import UIKit
+#endif
 import CoreText
 import QuartzCore
 
@@ -92,7 +96,7 @@ enum GlyphRaster {
     ///   - inset: how far in from the tile's left edge the glyph's origin sits,
     ///     before the sub-pixel phase is added.
     static func tile(character: String,
-                     font: NSFont,
+                     font: MorphFont,
                      ink: CGColor,
                      background: CGColor,
                      phaseBucket: Int,
@@ -192,7 +196,7 @@ enum GlyphRaster {
 
     /// Draws the glyph opaque — black on white, or white on black when the ink is
     /// the lighter of the two — and reads the result back as coverage.
-    private static func renderMask(_ key: MaskKey, font: NSFont) -> Mask? {
+    private static func renderMask(_ key: MaskKey, font: MorphFont) -> Mask? {
         let pixels = key.pixelWidth * key.pixelHeight
         guard let context = CGContext(data: nil,
                                       width: key.pixelWidth, height: key.pixelHeight,

@@ -1,4 +1,3 @@
-import AppKit
 import QuartzCore
 
 /// New characters zoom in from small while old characters blow up and fade.

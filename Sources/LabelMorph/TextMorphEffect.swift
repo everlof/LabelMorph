@@ -1,4 +1,3 @@
-import AppKit
 import QuartzCore
 
 /// A strategy describing how characters enter, leave, and move during a morph.
@@ -53,10 +52,10 @@ public extension TextMorphEffect {
         // Animate a relative translation instead of absolute positions: the
         // layer's model position stays authoritative even if the label is
         // re-laid out while the morph is in flight.
-        let delta = NSSize(width: from.x - to.x, height: from.y - to.y)
+        let delta = CGSize(width: from.x - to.x, height: from.y - to.y)
         let move = context.animation("transform.translation",
-                                     from: NSValue(size: delta),
-                                     to: NSValue(size: .zero))
+                                     from: morphSizeValue(delta),
+                                     to: morphSizeValue(.zero))
         layer.add(move, forKey: "morph.move")
     }
 }

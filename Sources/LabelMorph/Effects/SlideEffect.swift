@@ -1,4 +1,3 @@
-import AppKit
 import QuartzCore
 
 /// Characters slide in from one side and continue out the other, fading as
@@ -19,7 +18,7 @@ public final class SlideEffect: TextMorphEffect {
         self.distanceFactor = distanceFactor
     }
 
-    private func startOffset(for font: NSFont) -> CGVector {
+    private func startOffset(for font: MorphFont) -> CGVector {
         let distance = font.pointSize * distanceFactor
         switch direction {
         case .up: return CGVector(dx: 0, dy: -distance)
@@ -32,8 +31,8 @@ public final class SlideEffect: TextMorphEffect {
     public func animateIn(_ layer: CATextLayer, context: MorphContext) {
         let offset = startOffset(for: context.font)
         layer.add(context.animation("transform.translation",
-                                    from: NSValue(size: NSSize(width: offset.dx, height: offset.dy)),
-                                    to: NSValue(size: .zero)),
+                                    from: morphSizeValue(CGSize(width: offset.dx, height: offset.dy)),
+                                    to: morphSizeValue(.zero)),
                   forKey: "morph.in.translation")
         layer.add(context.animation("opacity", from: 0, to: 1), forKey: "morph.in.opacity")
     }
@@ -41,8 +40,8 @@ public final class SlideEffect: TextMorphEffect {
     public func animateOut(_ layer: CATextLayer, context: MorphContext) {
         let offset = startOffset(for: context.font)
         layer.add(context.animation("transform.translation",
-                                    from: NSValue(size: .zero),
-                                    to: NSValue(size: NSSize(width: -offset.dx, height: -offset.dy))),
+                                    from: morphSizeValue(.zero),
+                                    to: morphSizeValue(CGSize(width: -offset.dx, height: -offset.dy))),
                   forKey: "morph.out.translation")
         layer.add(context.animation("opacity", from: 1, to: 0), forKey: "morph.out.opacity")
     }

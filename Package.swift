@@ -5,6 +5,7 @@ let package = Package(
     name: "LabelMorph",
     platforms: [
         .macOS(.v13),
+        .iOS(.v17),
     ],
     products: [
         .library(name: "LabelMorph", targets: ["LabelMorph"]),
