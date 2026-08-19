@@ -103,6 +103,75 @@ final class GlyphRasterTests: XCTestCase {
                                 baseline: 5, inset: inset)
     }
 
+    // MARK: - Colour glyphs
+
+    /// A colour glyph is artwork, not ink, and the mask pipeline is written for ink: draw the
+    /// glyph opaque, read one channel back as coverage, tint that with the label's colour. Run
+    /// a colour bitmap through it and what comes out is a one-channel silhouette wearing the
+    /// label's colour — a grey rocket, or, for the marks agents put in front of a chat name, a
+    /// white asterisk with a dark cap over its top spoke.
+    func testAColourGlyphIsDrawnAsAuthoredRatherThanTintedWithTheLabelsInk() throws {
+        GlyphRaster.flush()
+        XCTAssertTrue(GlyphRaster.isColorGlyph("🚀", font: font),
+                      "this test needs a character the system draws from a colour face")
+
+        let tile = try XCTUnwrap(colourTile(for: "🚀"))
+        XCTAssertTrue(hasColour(tile), "the emoji came back monochrome")
+    }
+
+    /// The other half of the same contract: ordinary text still goes through the mask, so it
+    /// still takes the label's colour and the whole reason `GlyphRaster` exists is untouched.
+    func testAnOutlineGlyphIsStillTintedWithTheLabelsInk() throws {
+        GlyphRaster.flush()
+        XCTAssertFalse(GlyphRaster.isColorGlyph("R", font: font))
+
+        let red = try XCTUnwrap(colourTile(for: "R", ink: NSColor.red.cgColor))
+        let blue = try XCTUnwrap(colourTile(for: "R", ink: NSColor.blue.cgColor))
+        XCTAssertNotEqual(meanChannels(red).red, meanChannels(blue).red, accuracy: 0.0,
+                          "an outline glyph should follow the ink it is given")
+        XCTAssertGreaterThan(meanChannels(red).red, meanChannels(blue).red)
+    }
+
+    private func colourTile(for character: String, ink: CGColor = NSColor.black.cgColor) -> CGImage? {
+        GlyphRaster.tile(character: character, font: font,
+                         ink: ink,
+                         background: NSColor.white.cgColor,
+                         phaseBucket: 0, scale: 2,
+                         size: CGSize(width: 24, height: 24),
+                         baseline: 6, inset: 3)
+    }
+
+    /// Whether the tile carries more than one hue. A tinted mask cannot: every pixel is the
+    /// same colour at a different coverage, so the channels stay in a fixed ratio.
+    private func hasColour(_ image: CGImage) -> Bool {
+        guard let data = image.dataProvider?.data,
+              let bytes = CFDataGetBytePtr(data) else { return false }
+        var ratios: [Double] = []
+        for index in stride(from: 0, to: CFDataGetLength(data), by: 4) {
+            let alpha = Double(bytes[index])
+            guard alpha > 32 else { continue }
+            let red = Double(bytes[index + 1]) / alpha
+            let blue = Double(bytes[index + 3]) / alpha
+            ratios.append(red - blue)
+        }
+        guard let low = ratios.min(), let high = ratios.max() else { return false }
+        return high - low > 0.2
+    }
+
+    private func meanChannels(_ image: CGImage) -> (red: Double, blue: Double) {
+        guard let data = image.dataProvider?.data,
+              let bytes = CFDataGetBytePtr(data) else { return (0, 0) }
+        let count = CFDataGetLength(data) / 4
+        guard count > 0 else { return (0, 0) }
+        var red = 0.0
+        var blue = 0.0
+        for index in stride(from: 0, to: count * 4, by: 4) {
+            red += Double(bytes[index + 1])
+            blue += Double(bytes[index + 3])
+        }
+        return (red / Double(count), blue / Double(count))
+    }
+
     // MARK: - Backing scale
 
     func testSlotsAreLaidOutAgainstTheDisplaysPixelGrid() {

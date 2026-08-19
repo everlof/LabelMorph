@@ -52,6 +52,18 @@ import QuartzCore
 /// than re-rasterises, and both caches are keyed on the backing scale so a window
 /// dragged between a Retina display and a 1x one re-rasterises rather than
 /// resampling what it already had.
+///
+/// **A colour glyph goes nowhere near any of that.** Every step above assumes the
+/// glyph is an outline the text engine inks in one colour: draw it opaque, read
+/// one channel back as coverage, tint that with the label's colour. Apple Color
+/// Emoji is a bitmap the engine composites as authored, so reading a channel of it
+/// yields a monochrome ghost of the artwork — 🚀 comes out a grey silhouette, and
+/// ✳, whose colour form is a green asterisk on a shaded plate, comes out a white
+/// asterisk with a dark cap over its top spoke. Which face Core Text picks is
+/// platform state, not a property of the string: on macOS U+2733 falls back to
+/// Zapf Dingbats and looks right, while on iOS the same scalar resolves to
+/// `.AppleColorEmojiUI` and does not. So colour glyphs take `renderColor` below
+/// and are composited as drawn.
 enum GlyphRaster {
 
     /// Room around the typographic box for ink that overhangs it. A glyph's
@@ -123,6 +135,16 @@ enum GlyphRaster {
         lock.lock()
         defer { lock.unlock() }
 
+        if isColorGlyphLocked(character, font: font) {
+            // Keyed on the mask key like any other tile, minus the ink: the artwork is what it
+            // is, and re-tinting it is exactly what must not happen.
+            if let cached = colorCache[maskKey] { return cached }
+            guard let drawn = renderColor(maskKey, font: font) else { return nil }
+            if colorCache.count >= maxImages { colorCache.removeAll(keepingCapacity: true) }
+            colorCache[maskKey] = drawn
+            return drawn
+        }
+
         let imageKey = ImageKey(mask: maskKey, ink: packed(ink))
         if let cached = imageCache[imageKey] { return cached }
 
@@ -149,6 +171,44 @@ enum GlyphRaster {
         defer { lock.unlock() }
         maskCache.removeAll()
         imageCache.removeAll()
+        colorCache.removeAll()
+        colorFaceCache.removeAll()
+    }
+
+    /// Whether Core Text satisfies this character from a colour face.
+    ///
+    /// Asked of the resolved run rather than of the character, because the fallback cascade is
+    /// what decides: the same scalar reaches an outline face on one platform and Apple Color
+    /// Emoji on another, and a Unicode property cannot tell them apart.
+    static func isColorGlyph(_ character: String, font: MorphFont) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return isColorGlyphLocked(character, font: font)
+    }
+
+    /// The same answer, for a caller already holding the lock.
+    private static func isColorGlyphLocked(_ character: String, font: MorphFont) -> Bool {
+        let key = FaceKey(character: character,
+                          fontName: font.fontName,
+                          pointSize: font.pointSize)
+        if let cached = colorFaceCache[key] { return cached }
+
+        let line = CTLineCreateWithAttributedString(
+            NSAttributedString(string: character, attributes: [.font: font, .ligature: 0])
+        )
+        var isColor = false
+        for run in CTLineGetGlyphRuns(line) as! [CTRun] {
+            let attributes = CTRunGetAttributes(run) as NSDictionary
+            guard let anyFont = attributes[kCTFontAttributeName as String],
+                  CFGetTypeID(anyFont as CFTypeRef) == CTFontGetTypeID() else { continue }
+            if CTFontGetSymbolicTraits(anyFont as! CTFont).contains(.traitColorGlyphs) {
+                isColor = true
+                break
+            }
+        }
+        if colorFaceCache.count >= maxMasks { colorFaceCache.removeAll(keepingCapacity: true) }
+        colorFaceCache[key] = isColor
+        return isColor
     }
 
     // MARK: - Internals
@@ -181,9 +241,19 @@ enum GlyphRaster {
         let ink: UInt32
     }
 
+    /// Which face a character resolves to depends on the character and the requested font, and
+    /// on nothing the tile knows — so the answer outlives every tile size and scale.
+    private struct FaceKey: Hashable {
+        let character: String
+        let fontName: String
+        let pointSize: CGFloat
+    }
+
     private static let lock = NSLock()
     private static var maskCache: [MaskKey: Mask] = [:]
     private static var imageCache: [ImageKey: CGImage] = [:]
+    private static var colorCache: [MaskKey: CGImage] = [:]
+    private static var colorFaceCache: [FaceKey: Bool] = [:]
 
     /// Generous enough that a sidebar never thrashes, small enough that the
     /// crude evict-everything policy below stays affordable. A tile is on the
@@ -235,6 +305,31 @@ enum GlyphRaster {
         }
         guard !isBlank else { return nil }
         return Mask(pixelWidth: key.pixelWidth, pixelHeight: key.pixelHeight, coverage: coverage)
+    }
+
+    /// Draws a colour glyph as authored, into a transparent tile.
+    ///
+    /// No opaque ground and no smoothing: both exist to recover stem darkening for outline
+    /// text below 2x, and neither applies to artwork. Nothing is read back and nothing is
+    /// tinted — the tile *is* the glyph.
+    private static func renderColor(_ key: MaskKey, font: MorphFont) -> CGImage? {
+        guard let context = CGContext(data: nil,
+                                      width: key.pixelWidth, height: key.pixelHeight,
+                                      bitsPerComponent: 8,
+                                      bytesPerRow: key.pixelWidth * 4,
+                                      space: srgb, bitmapInfo: bitmapInfo) else { return nil }
+
+        context.scaleBy(x: key.scale, y: key.scale)
+        context.setShouldAntialias(true)
+
+        let attributed = NSAttributedString(string: key.character, attributes: [
+            .font: font,
+            .ligature: 0,
+        ])
+        context.textPosition = CGPoint(x: key.inset + phase(for: key.phaseBucket) / key.scale,
+                                       y: key.baseline)
+        CTLineDraw(CTLineCreateWithAttributedString(attributed), context)
+        return context.makeImage()
     }
 
     /// Premultiplies the ink colour through the mask's coverage.

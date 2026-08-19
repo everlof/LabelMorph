@@ -24,8 +24,18 @@ public final class GlyphMorphEffect: TextReplacementMorphEffect {
                                to newLayer: CATextLayer,
                                in container: CALayer,
                                context: MorphContext) {
-        addShapeMorph(from: glyphPath(of: oldLayer),
-                      to: glyphPath(of: newLayer),
+        let source = glyphPath(of: oldLayer)
+        let target = glyphPath(of: newLayer)
+        // A colour glyph is a bitmap with no outline to lift, so neither side has a shape to
+        // stand in for it. Concealing the incoming layer anyway would blink the character out
+        // for the length of the morph and pop it back; cross-fade the two instead.
+        guard source != nil || target != nil else {
+            oldLayer.add(context.animation("opacity", from: 1, to: 0), forKey: "morph.out")
+            newLayer.add(context.animation("opacity", from: 0, to: 1), forKey: "morph.in")
+            return
+        }
+        addShapeMorph(from: source,
+                      to: target,
                       styledAfter: newLayer,
                       in: container,
                       context: context,
