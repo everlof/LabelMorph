@@ -37,6 +37,29 @@ public protocol TextReplacementMorphEffect: TextMorphEffect {
                         context: MorphContext)
 }
 
+/// An effect that replaces the complete old line with the complete new line.
+///
+/// Unlike character-scoped effects, a whole-line effect does not diff or reuse
+/// matching characters. `MorphingLabel` builds both complete glyph runs and
+/// calls this method once, allowing the effect to move each run in lockstep.
+public protocol WholeLineMorphEffect: TextMorphEffect {
+    /// Animate one complete single-line value into another.
+    ///
+    /// `outgoing` and `incoming` preserve visual character order. Either array
+    /// can be empty when text is first introduced or cleared.
+    func animateLineTransition(from outgoing: [CATextLayer],
+                               to incoming: [CATextLayer],
+                               in container: CALayer,
+                               context: MorphContext)
+}
+
+public extension WholeLineMorphEffect {
+    /// Whole-line effects receive the transition through
+    /// `animateLineTransition`; the character callbacks are intentionally idle.
+    func animateIn(_ layer: CATextLayer, context: MorphContext) {}
+    func animateOut(_ layer: CATextLayer, context: MorphContext) {}
+}
+
 /// Name for temporary layers an effect adds to the label's backing layer
 /// (shape stand-ins, particles, …). `MorphingLabel` removes every sublayer
 /// carrying this name when a morph is interrupted or the label is rebuilt.

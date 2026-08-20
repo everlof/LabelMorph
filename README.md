@@ -1,6 +1,7 @@
 # LabelMorph
 
-An AppKit and UIKit framework for morphing text on a label, character by character.
+An AppKit and UIKit framework for morphing text on a label, character by
+character or as a complete line.
 
 ![Shape Morph](Docs/shapemorph.gif)
 
@@ -25,6 +26,14 @@ label.textColor = .label
 #endif
 label.effect = MorphPreset.shapeMorph.makeEffect(intensity: 0.7)
 label.timing = MorphTiming(duration: 0.55, stagger: 0.045)
+label.fadeStyle = .traveling // optional leading-to-trailing opacity wave
+label.fadeConfiguration = MorphFadeConfiguration(
+    pulseCount: 2,
+    minimumOpacity: 0.14,
+    pulseDuration: 0.28,
+    pauseDuration: 0.12,
+    travelDuration: 0.42
+)
 
 label.text = "Hello, World!"   // morphs using the current effect
 label.setText("Goodbye!", animated: false)
@@ -56,7 +65,8 @@ and embed the `LabelMorph` framework target.
 | --- | --- |
 | Shape Morph | Each glyph's outline is broken into contours and morphed into the new glyph in place; added characters grow from points, removed ones collapse into them |
 | Crossfade | Old characters fade out, new fade in |
-| Slide Up / Slide Down | Characters slide through vertically, fading |
+| Slide Up / Slide Down | Characters slide through vertically and fade with the configured cascade |
+| Line Scroll Up / Line Scroll Down | The complete old line scrolls and fades out while the complete new line scrolls and fades in from the opposite edge |
 | Scale | New characters zoom in, old ones blow up and fade |
 | Bounce | Characters spring up from below with overshoot |
 | Drop | Characters fall in from above with a tilt and spring landing |
@@ -67,6 +77,15 @@ and embed the `LabelMorph` framework target.
 
 Every preset exposes `recommendedTiming` and takes an `intensity` (0…1) that
 scales its parameters (distance, spring damping, blur radius, …).
+
+`fadeStyle = .traveling` is an orthogonal option available to every preset. It
+passes a soft, repeating opacity pulse from the leading glyph to the trailing
+glyph while the selected effect keeps its own movement, shape, blur, or
+replacement motion. `fadeConfiguration` controls the pulse count, opacity
+depth, duration of each pulse, full-opacity pause between pulses, and time for
+the wave to cross the line. A zero pause produces a continuous pulse train.
+Because the opacity envelope lives on a carrier around each glyph position, it
+composes with an effect's own fades rather than replacing them.
 
 | Bounce | Scramble | Blur |
 | --- | --- | --- |
@@ -96,18 +115,37 @@ character *in place* (like Shape Morph does): the label then pairs old and new
 characters by position and calls `animateReplace(from:to:in:context:)` for
 each changed pair.
 
+Conform to `WholeLineMorphEffect` when character identity should not cross the
+transition. The label builds both complete glyph runs without diffing or reusing
+matching characters, then calls `animateLineTransition(from:to:in:context:)`
+once so the effect can move each run in lockstep.
+
 ## Showcase app
 
 ![Showcase app](Docs/hero.png)
 
-The `Showcase` target is a small app for playing with the effects: an effect
-picker, sliders for duration / stagger / intensity / font size, easing
-selection, custom text input, phrase cycling (click the preview), auto-play,
-and a toggle for character reuse.
+The `Showcase` target is a small app for playing with the effects. Its picker
+groups effects into **Single Character** and **Full Row** sections; the controls
+cover duration, stagger, intensity, font size, easing, custom text, phrase
+cycling, matching-character reuse, and traveling-fade count/depth/pulse/pause/
+travel tuning.
+
+Pass `-fade YES` when launching the Showcase to enable the fade for a scripted
+demo. `-fadePause 0` demonstrates the continuous, zero-hold pulse train.
 
 ```sh
 xcodegen generate
 open LabelMorph.xcodeproj   # run the "Showcase" scheme
+```
+
+## Performance benchmarks
+
+The package owns opt-in microbenchmarks for the per-glyph traveling-fade setup
+and whole-line handoff setup. They stay out of ordinary correctness runs because
+XCTest performance baselines are machine-specific:
+
+```sh
+LABELMORPH_BENCHMARKS=1 swift test --filter MorphingLabelPerformanceTests
 ```
 
 ## Truncation

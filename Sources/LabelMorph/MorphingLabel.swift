@@ -5,12 +5,13 @@ import UIKit
 #endif
 import QuartzCore
 
-/// A single-line label that animates text changes character by character.
+/// A single-line label that animates text changes by character or as a whole line.
 ///
 /// Setting `text` (or calling `setText(_:animated:)`) diffs the old and new
-/// strings: characters present in both fly to their new position, removed
-/// characters animate out, and added characters animate in — all according to
-/// the current `effect` and `timing`.
+/// strings for the ordinary character-scoped effects: characters present in
+/// both fly to their new position, removed characters animate out, and added
+/// characters animate in. A `WholeLineMorphEffect` instead replaces both
+/// complete lines without diffing them.
 public final class MorphingLabel: MorphView {
 
     // MARK: - Public API
@@ -80,14 +81,26 @@ public final class MorphingLabel: MorphView {
         }
     }
 
-    /// The strategy used to animate characters. See `MorphPreset` for the
+    /// The strategy used to animate a text change. See `MorphPreset` for the
     /// built-in effects, or implement `TextMorphEffect` for custom ones.
     public var effect: TextMorphEffect = CrossfadeEffect()
 
     public var timing = MorphTiming()
 
-    /// When enabled, characters that exist in both the old and new text fly
-    /// to their new position instead of animating out and back in.
+    /// An optional fade composed around the selected effect.
+    ///
+    /// `.traveling` gives every visual character position its own opacity
+    /// carrier, so the fade combines with transforms and shape replacements
+    /// instead of replacing or fighting their opacity animations.
+    public var fadeStyle: MorphFadeStyle = .none
+
+    /// Pulse count, depth, pulse/pause timing, and travel time for `.traveling`.
+    /// Changes apply to the next text transition.
+    public var fadeConfiguration = MorphFadeConfiguration()
+
+    /// When enabled, character-scoped effects fly characters that exist in
+    /// both the old and new text to their new position instead of animating
+    /// them out and back in. Whole-line effects always replace the full line.
     public var reusesMatchingCharacters = true
 
     /// Setting this morphs to the new value using the current effect.
@@ -104,6 +117,45 @@ public final class MorphingLabel: MorphView {
             return
         }
         morph(to: newText)
+    }
+
+    /// Plays the configured fade over the settled text without changing it.
+    ///
+    /// This is the activity form of `fadeStyle`: a host can gently restate a label that is still
+    /// current without manufacturing a text transition. An in-flight text morph keeps ownership
+    /// of its glyph tree; asking for a standalone fade during one is intentionally ignored.
+    public func playFade() {
+        guard fadeStyle == .traveling,
+              window != nil,
+              !bounds.isEmpty,
+              !charLayers.isEmpty,
+              activeTextMorphGeneration == nil else { return }
+
+        generation += 1
+        let currentGeneration = generation
+        flattenFadeCarriers()
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for (index, layer) in charLayers.enumerated() {
+            installFadeCarrier(around: [layer], index: index, count: charLayers.count)
+        }
+        isPlayingStandaloneFade = true
+        CATransaction.commit()
+
+        let cleanupDelay = fadeSettleDuration(characterCount: charLayers.count)
+        DispatchQueue.main.asyncAfter(deadline: .now() + cleanupDelay) { [weak self] in
+            guard let self, self.generation == currentGeneration else { return }
+            self.flattenFadeCarriers()
+        }
+    }
+
+    /// Stops a fade started by `playFade()` and restores the settled text immediately.
+    /// A fade participating in a real text morph remains owned by that morph.
+    public func stopFade() {
+        guard isPlayingStandaloneFade else { return }
+        generation += 1
+        flattenFadeCarriers()
     }
 
     // MARK: - Setup
@@ -206,6 +258,9 @@ public final class MorphingLabel: MorphView {
     private var charLayers: [GlyphLayer] = []
     private var leavingLayers: [GlyphLayer] = []
     private var generation = 0
+    /// A text morph can consist entirely of retained moves or incoming glyphs,
+    /// so outgoing-layer presence is not a reliable ownership signal.
+    private var activeTextMorphGeneration: Int?
     private var isResolvingMorphLayout = false
 
     /// AppKit creates a backing layer only after `wantsLayer`; UIKit always has one. Keeping the
@@ -272,8 +327,10 @@ public final class MorphingLabel: MorphView {
         // snap retained layers to their model state.
         leavingLayers.forEach { $0.removeFromSuperlayer() }
         leavingLayers.removeAll()
+        flattenFadeCarriers()
         purgeTransientLayers()
         charLayers.forEach { $0.removeAllAnimations() }
+        activeTextMorphGeneration = currentGeneration
 
         let oldSlots = visibleSlots
         let oldLayers = charLayers
@@ -323,7 +380,10 @@ public final class MorphingLabel: MorphView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
 
-        if let replacementEffect = effect as? TextReplacementMorphEffect {
+        if let wholeLineEffect = effect as? WholeLineMorphEffect {
+            morphByWholeLine(wholeLineEffect, oldLayers: oldLayers,
+                             newSlots: newSlots, newLayers: &newLayers)
+        } else if let replacementEffect = effect as? TextReplacementMorphEffect {
             morphByPosition(replacementEffect, oldSlots: oldSlots, oldLayers: oldLayers,
                             newSlots: newSlots, newLayers: &newLayers)
         } else {
@@ -336,14 +396,60 @@ public final class MorphingLabel: MorphView {
         charLayers = newLayers.compactMap { $0 }
         rememberLayout(of: displayedText)
 
-        let cleanupDelay = timing.duration
-            + timing.stagger * CFTimeInterval(max(oldSlots.count, newSlots.count))
+        let staggeredUnitCount = effect is WholeLineMorphEffect
+            ? 0
+            : max(oldSlots.count, newSlots.count)
+        let effectCleanupDelay = timing.duration
+            + timing.stagger * CFTimeInterval(staggeredUnitCount)
             + effect.settleMargin
+        let cleanupDelay = max(
+            effectCleanupDelay,
+            fadeSettleDuration(characterCount: max(oldSlots.count, newSlots.count))
+        )
         DispatchQueue.main.asyncAfter(deadline: .now() + cleanupDelay) { [weak self] in
             guard let self, self.generation == currentGeneration else { return }
             self.leavingLayers.forEach { $0.removeFromSuperlayer() }
             self.leavingLayers.removeAll()
+            self.flattenFadeCarriers()
+            self.activeTextMorphGeneration = nil
         }
+    }
+
+    /// Whole-line flow: both complete glyph runs coexist and the effect receives
+    /// them once. No character identity crosses the transition, even when the
+    /// two strings contain matching letters.
+    private func morphByWholeLine(_ wholeLineEffect: WholeLineMorphEffect,
+                                  oldLayers: [GlyphLayer],
+                                  newSlots: [CharacterSlot],
+                                  newLayers: inout [GlyphLayer?]) {
+        guard let container = morphLayer else { return }
+
+        let incoming = newSlots.enumerated().map { index, slot in
+            let layer = makeLayer(for: slot)
+            container.addSublayer(layer)
+            newLayers[index] = layer
+            return layer
+        }
+        leavingLayers.append(contentsOf: oldLayers)
+
+        let positionCount = max(oldLayers.count, incoming.count)
+        for index in 0..<positionCount {
+            var layers: [GlyphLayer] = []
+            if oldLayers.indices.contains(index) { layers.append(oldLayers[index]) }
+            if incoming.indices.contains(index) { layers.append(incoming[index]) }
+            installFadeCarrier(around: layers, index: index, count: positionCount)
+        }
+
+        wholeLineEffect.animateLineTransition(
+            from: oldLayers,
+            to: incoming,
+            in: container,
+            context: context(index: 0, count: 1)
+        )
+
+        // Once animations are removed, the outgoing line's model state must
+        // remain invisible until deferred cleanup detaches it.
+        oldLayers.forEach { $0.opacity = 0 }
     }
 
     /// Classic flow: characters common to both texts fly to their new
@@ -355,12 +461,14 @@ public final class MorphingLabel: MorphView {
             new: newSlots.map(\.character),
             matchDistanceLimit: reusesMatchingCharacters ? nil : 0
         )
+        let positionCount = max(oldSlots.count, newSlots.count)
 
         for move in diff.moves {
             let layer = oldLayers[move.from]
             let fromPosition = layer.position
             layer.apply(newSlots[move.to])
             newLayers[move.to] = layer
+            installFadeCarrier(around: [layer], index: move.to, count: positionCount)
             if fromPosition != layer.position {
                 effect.animateMove(layer, from: fromPosition, to: layer.position,
                                    context: context(index: move.to, count: newSlots.count))
@@ -371,12 +479,14 @@ public final class MorphingLabel: MorphView {
             let charLayer = makeLayer(for: newSlots[index])
             morphLayer?.addSublayer(charLayer)
             newLayers[index] = charLayer
+            installFadeCarrier(around: [charLayer], index: index, count: positionCount)
             effect.animateIn(charLayer, context: context(index: index, count: newSlots.count))
         }
 
         for index in diff.removals {
             let charLayer = oldLayers[index]
             leavingLayers.append(charLayer)
+            installFadeCarrier(around: [charLayer], index: index, count: positionCount)
             effect.animateOut(charLayer, context: context(index: index, count: oldSlots.count))
             // Final model state is invisible: once the effect's animations
             // complete and are removed, the layer must not pop back before
@@ -392,6 +502,7 @@ public final class MorphingLabel: MorphView {
                                  newSlots: [CharacterSlot], newLayers: inout [GlyphLayer?]) {
         guard let container = morphLayer else { return }
         let pairCount = min(oldSlots.count, newSlots.count)
+        let positionCount = max(oldSlots.count, newSlots.count)
 
         for index in 0..<newSlots.count {
             if index < pairCount {
@@ -400,6 +511,8 @@ public final class MorphingLabel: MorphView {
                     let fromPosition = oldLayer.position
                     oldLayer.apply(newSlots[index])
                     newLayers[index] = oldLayer
+                    installFadeCarrier(around: [oldLayer], index: index,
+                                       count: positionCount)
                     if fromPosition != oldLayer.position {
                         effect.animateMove(oldLayer, from: fromPosition, to: oldLayer.position,
                                            context: context(index: index, count: newSlots.count))
@@ -409,7 +522,13 @@ public final class MorphingLabel: MorphView {
                     container.addSublayer(newLayer)
                     newLayers[index] = newLayer
                     leavingLayers.append(oldLayer)
-                    replacementEffect.animateReplace(from: oldLayer, to: newLayer, in: container,
+                    let transitionContainer = installFadeCarrier(
+                        around: [oldLayer, newLayer],
+                        index: index,
+                        count: positionCount
+                    ) ?? container
+                    replacementEffect.animateReplace(from: oldLayer, to: newLayer,
+                                                     in: transitionContainer,
                                                      context: context(index: index, count: newSlots.count))
                     oldLayer.opacity = 0
                 }
@@ -417,6 +536,7 @@ public final class MorphingLabel: MorphView {
                 let newLayer = makeLayer(for: newSlots[index])
                 container.addSublayer(newLayer)
                 newLayers[index] = newLayer
+                installFadeCarrier(around: [newLayer], index: index, count: positionCount)
                 effect.animateIn(newLayer, context: context(index: index, count: newSlots.count))
             }
         }
@@ -424,6 +544,7 @@ public final class MorphingLabel: MorphView {
         for index in pairCount..<oldSlots.count {
             let oldLayer = oldLayers[index]
             leavingLayers.append(oldLayer)
+            installFadeCarrier(around: [oldLayer], index: index, count: positionCount)
             effect.animateOut(oldLayer, context: context(index: index, count: oldSlots.count))
             oldLayer.opacity = 0
         }
@@ -469,8 +590,10 @@ public final class MorphingLabel: MorphView {
     /// Tears everything down and lays the current text out from scratch.
     private func rebuild() {
         generation += 1
+        activeTextMorphGeneration = nil
         (charLayers + leavingLayers).forEach { $0.removeFromSuperlayer() }
         leavingLayers.removeAll()
+        removeFadeCarriers()
         purgeTransientLayers()
 
         let displayedText = displayText(in: bounds)
@@ -494,6 +617,8 @@ public final class MorphingLabel: MorphView {
 
     /// Repositions existing layers after a bounds, alignment, or similar change.
     private func relayoutCurrent() {
+        resizeFadeCarriers()
+
         // A width change can change how much of the text fits, so this is also where a
         // truncated line grows or shrinks — which changes the laid-out characters and falls
         // through to a rebuild. Compared by *character*, not by count: tail truncation that
@@ -563,12 +688,181 @@ public final class MorphingLabel: MorphView {
         lastRasterizedScale = scale
     }
 
+    // MARK: - Traveling fade
+
+    private enum FadeWaveDefaults {
+        static let carrierName = "labelmorph.fade-carrier"
+        static let animationKey = "morph.fade.traveling"
+    }
+
+    private var fadeCarriers: [CALayer] = []
+    private var fadeCarriersByPosition: [Int: CALayer] = [:]
+    private var isPlayingStandaloneFade = false
+
+    /// Wraps one visual character position in a full-label carrier. Effects keep
+    /// animating the glyphs themselves; the carrier supplies an independent
+    /// multiplicative opacity envelope, so two animations never compete for the
+    /// same key path. Replacement pairs share one carrier, which also lets a
+    /// temporary Shape Morph layer inherit the same fade.
+    @discardableResult
+    private func installFadeCarrier(around layers: [GlyphLayer],
+                                    index: Int,
+                                    count: Int) -> CALayer? {
+        guard fadeStyle == .traveling, !layers.isEmpty, let container = morphLayer else {
+            return nil
+        }
+
+        if let carrier = fadeCarriersByPosition[index] {
+            layers.forEach { carrier.addSublayer($0) }
+            return carrier
+        }
+
+        let carrier = CALayer()
+        carrier.name = FadeWaveDefaults.carrierName
+        carrier.frame = container.bounds
+        carrier.sublayerTransform = container.sublayerTransform
+        carrier.actions = Self.disabledActions
+        container.addSublayer(carrier)
+        layers.forEach { carrier.addSublayer($0) }
+
+        let animation = CAKeyframeAnimation(keyPath: "opacity")
+        let envelope = fadeEnvelope()
+        animation.values = envelope.values
+        animation.keyTimes = envelope.keyTimes
+        animation.beginTime = CACurrentMediaTime() + fadeDelay(index: index, count: count)
+        animation.duration = envelope.duration
+        animation.timingFunctions = fadeTimingFunctions(for: envelope.values)
+        animation.fillMode = .backwards
+        animation.isRemovedOnCompletion = true
+        carrier.add(animation, forKey: FadeWaveDefaults.animationKey)
+
+        fadeCarriers.append(carrier)
+        fadeCarriersByPosition[index] = carrier
+        return carrier
+    }
+
+    private func fadeDelay(index: Int, count: Int) -> CFTimeInterval {
+        guard count > 1 else { return 0 }
+        return normalizedFadeTravelDuration
+            * CFTimeInterval(index) / CFTimeInterval(count - 1)
+    }
+
+    private func fadeSettleDuration(characterCount: Int) -> CFTimeInterval {
+        guard fadeStyle == .traveling, characterCount > 0 else { return 0 }
+        return fadeEnvelopeDuration
+            + (characterCount > 1 ? normalizedFadeTravelDuration : 0)
+    }
+
+    /// Builds one complete pulse train. A zero pause inserts no duplicate
+    /// full-opacity keyframe, so consecutive pulses share an exact boundary.
+    /// There is never an invisible pause tail after the final pulse.
+    private func fadeEnvelope() -> (values: [NSNumber], keyTimes: [NSNumber], duration: CFTimeInterval) {
+        let duration = fadeEnvelopeDuration
+        var values: [NSNumber] = [1]
+        var times: [CFTimeInterval] = [0]
+
+        for pulseIndex in 0..<normalizedFadePulseCount {
+            let pulseStart = CFTimeInterval(pulseIndex)
+                * (normalizedFadePulseDuration + normalizedFadePauseDuration)
+            values.append(NSNumber(value: normalizedFadeMinimumOpacity))
+            times.append(pulseStart + normalizedFadePulseDuration / 2)
+            values.append(1)
+            times.append(pulseStart + normalizedFadePulseDuration)
+
+            if pulseIndex < normalizedFadePulseCount - 1,
+               normalizedFadePauseDuration > 0 {
+                values.append(1)
+                times.append(pulseStart + normalizedFadePulseDuration + normalizedFadePauseDuration)
+            }
+        }
+
+        return (
+            values,
+            times.map { NSNumber(value: $0 / duration) },
+            duration
+        )
+    }
+
+    private var fadeEnvelopeDuration: CFTimeInterval {
+        normalizedFadePulseDuration * CFTimeInterval(normalizedFadePulseCount)
+            + normalizedFadePauseDuration * CFTimeInterval(normalizedFadePulseCount - 1)
+    }
+
+    /// Ease away from full opacity and into the shaded trough. At a zero-pause
+    /// pulse boundary this avoids the double ease-in/out flattening that reads
+    /// as a pause even when no hold keyframe exists.
+    private func fadeTimingFunctions(for values: [NSNumber]) -> [CAMediaTimingFunction] {
+        zip(values, values.dropFirst()).map { from, to in
+            if from == to {
+                return CAMediaTimingFunction(name: .linear)
+            }
+            return CAMediaTimingFunction(name: to.doubleValue < from.doubleValue ? .easeOut : .easeIn)
+        }
+    }
+
+    private var normalizedFadePulseCount: Int {
+        max(1, fadeConfiguration.pulseCount)
+    }
+
+    private var normalizedFadeMinimumOpacity: Float {
+        min(1, max(0, fadeConfiguration.minimumOpacity))
+    }
+
+    private var normalizedFadePulseDuration: CFTimeInterval {
+        max(0.01, fadeConfiguration.pulseDuration)
+    }
+
+    private var normalizedFadePauseDuration: CFTimeInterval {
+        max(0, fadeConfiguration.pauseDuration)
+    }
+
+    private var normalizedFadeTravelDuration: CFTimeInterval {
+        max(0, fadeConfiguration.travelDuration)
+    }
+
+    private func resizeFadeCarriers() {
+        guard let bounds = morphLayer?.bounds else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        fadeCarriers.forEach { $0.frame = bounds }
+        CATransaction.commit()
+    }
+
+    /// Returns the settled glyph run to the ordinary direct layer tree, then
+    /// removes outgoing glyphs and temporary replacement shapes with the
+    /// carriers that held them.
+    private func flattenFadeCarriers() {
+        guard let container = morphLayer, !fadeCarriers.isEmpty else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for layer in charLayers where layer.superlayer?.name == FadeWaveDefaults.carrierName {
+            container.addSublayer(layer)
+        }
+        fadeCarriers.forEach { $0.removeFromSuperlayer() }
+        fadeCarriers.removeAll()
+        fadeCarriersByPosition.removeAll()
+        isPlayingStandaloneFade = false
+        CATransaction.commit()
+    }
+
+    private func removeFadeCarriers() {
+        fadeCarriers.forEach { $0.removeFromSuperlayer() }
+        fadeCarriers.removeAll()
+        fadeCarriersByPosition.removeAll()
+        isPlayingStandaloneFade = false
+    }
+
     /// Removes temporary overlay layers effects may have added (see
     /// `MorphTransientLayer`).
     private func purgeTransientLayers() {
-        morphLayer?.sublayers?
+        descendantLayers(in: morphLayer)
             .filter { $0.name == MorphTransientLayer.name }
             .forEach { $0.removeFromSuperlayer() }
+    }
+
+    private func descendantLayers(in root: CALayer?) -> [CALayer] {
+        guard let children = root?.sublayers else { return [] }
+        return children + children.flatMap { descendantLayers(in: $0) }
     }
 
     /// Re-lays out and re-rasterises the line for the display it is now on.
@@ -623,7 +917,7 @@ public final class MorphingLabel: MorphView {
             textLayer.string = recolored
         }
 
-        morphLayer?.sublayers?
+        descendantLayers(in: morphLayer)
             .compactMap { $0 as? CAShapeLayer }
             .filter { $0.name == MorphTransientLayer.name }
             .forEach { $0.fillColor = color }

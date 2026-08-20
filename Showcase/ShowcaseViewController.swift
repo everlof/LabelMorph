@@ -4,6 +4,9 @@ import LabelMorph
 
 final class ShowcaseViewController: NSViewController {
 
+    static let initialContentSize = NSSize(width: 980, height: 800)
+    static let minimumContentSize = NSSize(width: 760, height: 540)
+
     // MARK: - Views
 
     private let label = MorphingLabel()
@@ -19,18 +22,37 @@ final class ShowcaseViewController: NSViewController {
                                                 target: self, action: #selector(controlsChanged))
     private lazy var fontSlider = NSSlider(value: 44, minValue: 16, maxValue: 96,
                                            target: self, action: #selector(fontChanged))
+    private lazy var fadePulseSlider = NSSlider(value: 2, minValue: 1, maxValue: 5,
+                                                target: self, action: #selector(controlsChanged))
+    private lazy var fadeDepthSlider = NSSlider(value: 0.86, minValue: 0.1, maxValue: 0.95,
+                                                target: self, action: #selector(controlsChanged))
+    private lazy var fadePulseDurationSlider = NSSlider(value: 0.28, minValue: 0.1, maxValue: 0.8,
+                                                        target: self, action: #selector(controlsChanged))
+    private lazy var fadePauseSlider = NSSlider(value: 0.12, minValue: 0, maxValue: 0.8,
+                                                target: self, action: #selector(controlsChanged))
+    private lazy var fadeTravelSlider = NSSlider(value: 0.42, minValue: 0, maxValue: 1.0,
+                                                 target: self, action: #selector(controlsChanged))
 
     private let durationValue = NSTextField(labelWithString: "")
     private let staggerValue = NSTextField(labelWithString: "")
     private let intensityValue = NSTextField(labelWithString: "")
     private let fontValue = NSTextField(labelWithString: "")
+    private let fadePulseValue = NSTextField(labelWithString: "")
+    private let fadeDepthValue = NSTextField(labelWithString: "")
+    private let fadePulseDurationValue = NSTextField(labelWithString: "")
+    private let fadePauseValue = NSTextField(labelWithString: "")
+    private let fadeTravelValue = NSTextField(labelWithString: "")
 
+    private let durationCaption = ShowcaseViewController.captionLabel("")
+    private let staggerCaption = ShowcaseViewController.captionLabel("")
     private let intensityCaption = ShowcaseViewController.captionLabel("")
 
     private let textField = NSTextField(string: "Hello, World!")
 
     private lazy var reuseCheckbox = NSButton(checkboxWithTitle: "Reuse matching characters",
                                               target: self, action: #selector(controlsChanged))
+    private lazy var fadeCheckbox = NSButton(checkboxWithTitle: "Traveling fade",
+                                             target: self, action: #selector(controlsChanged))
     private lazy var autoCheckbox = NSButton(checkboxWithTitle: "Auto-cycle phrases every 2 s",
                                              target: self, action: #selector(autoToggled))
 
@@ -42,7 +64,7 @@ final class ShowcaseViewController: NSViewController {
     private let phrases = [
         "Hello, World!",
         "LabelMorph",
-        "Eleven ways to morph",
+        "Thirteen ways to morph",
         "The quick brown fox",
         "jumps over the lazy dog",
         "0123456789",
@@ -59,7 +81,11 @@ final class ShowcaseViewController: NSViewController {
     ]
 
     private var currentPreset: MorphPreset {
-        MorphPreset.allCases[max(0, presetPopup.indexOfSelectedItem)]
+        guard let rawValue = presetPopup.selectedItem?.representedObject as? String,
+              let preset = MorphPreset(rawValue: rawValue) else {
+            return .crossfade
+        }
+        return preset
     }
 
     deinit {
@@ -69,7 +95,7 @@ final class ShowcaseViewController: NSViewController {
     // MARK: - View construction
 
     override func loadView() {
-        let root = NSView(frame: NSRect(x: 0, y: 0, width: 980, height: 620))
+        let root = NSView(frame: NSRect(origin: .zero, size: Self.initialContentSize))
 
         let preview = NSView()
         preview.translatesAutoresizingMaskIntoConstraints = false
@@ -96,7 +122,19 @@ final class ShowcaseViewController: NSViewController {
         panel.alignment = .leading
         panel.spacing = 14
         panel.translatesAutoresizingMaskIntoConstraints = false
-        root.addSubview(panel)
+
+        let panelDocument = ShowcaseFlippedView()
+        panelDocument.translatesAutoresizingMaskIntoConstraints = false
+        panelDocument.addSubview(panel)
+
+        let panelScroll = NSScrollView()
+        panelScroll.translatesAutoresizingMaskIntoConstraints = false
+        panelScroll.hasVerticalScroller = true
+        panelScroll.autohidesScrollers = true
+        panelScroll.drawsBackground = false
+        panelScroll.borderType = .noBorder
+        panelScroll.documentView = panelDocument
+        root.addSubview(panelScroll)
 
         func addRow(_ row: NSView) {
             row.translatesAutoresizingMaskIntoConstraints = false
@@ -106,9 +144,9 @@ final class ShowcaseViewController: NSViewController {
 
         addRow(labeledRow("Effect", control: presetPopup))
         addRow(labeledRow("Duration", control: durationSlider, value: durationValue,
-                          caption: Self.captionLabel("Animation time for a single character — not the whole morph. Spring effects (Bounce, Drop) settle a little later.")))
+                          caption: durationCaption))
         addRow(labeledRow("Stagger", control: staggerSlider, value: staggerValue,
-                          caption: Self.captionLabel("Extra start delay per character, creating the cascade. Whole morph ≈ duration + stagger × (characters − 1).")))
+                          caption: staggerCaption))
         addRow(labeledRow("Intensity", control: intensitySlider, value: intensityValue,
                           caption: intensityCaption))
         easingPopup.toolTip = "Timing curve for regular animations. Bounce and Drop use spring physics and ignore it."
@@ -131,6 +169,8 @@ final class ShowcaseViewController: NSViewController {
         let nextButton = NSButton(title: "Next Phrase", target: self, action: #selector(nextPhrase))
         addRow(nextButton)
         addRow(reuseCheckbox)
+        fadeCheckbox.toolTip = "Pass a soft opacity wave through the glyphs while the selected effect runs."
+        addRow(labeledRow("Fade overlay", control: fadeControls()))
         addRow(autoCheckbox)
 
         NSLayoutConstraint.activate([
@@ -147,9 +187,19 @@ final class ShowcaseViewController: NSViewController {
             divider.bottomAnchor.constraint(equalTo: root.bottomAnchor),
             divider.widthAnchor.constraint(equalToConstant: 1),
 
-            panel.leadingAnchor.constraint(equalTo: divider.trailingAnchor, constant: 20),
-            panel.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -20),
-            panel.topAnchor.constraint(equalTo: root.topAnchor, constant: 20),
+            panelScroll.leadingAnchor.constraint(equalTo: divider.trailingAnchor),
+            panelScroll.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            panelScroll.topAnchor.constraint(equalTo: root.topAnchor),
+            panelScroll.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+
+            panelDocument.topAnchor.constraint(equalTo: panelScroll.contentView.topAnchor),
+            panelDocument.leadingAnchor.constraint(equalTo: panelScroll.contentView.leadingAnchor),
+            panelDocument.trailingAnchor.constraint(equalTo: panelScroll.contentView.trailingAnchor),
+
+            panel.leadingAnchor.constraint(equalTo: panelDocument.leadingAnchor, constant: 20),
+            panel.trailingAnchor.constraint(equalTo: panelDocument.trailingAnchor, constant: -20),
+            panel.topAnchor.constraint(equalTo: panelDocument.topAnchor, constant: 20),
+            panel.bottomAnchor.constraint(equalTo: panelDocument.bottomAnchor, constant: -20),
             panel.widthAnchor.constraint(equalToConstant: 280),
 
             label.centerXAnchor.constraint(equalTo: preview.centerXAnchor),
@@ -159,14 +209,8 @@ final class ShowcaseViewController: NSViewController {
             hint.bottomAnchor.constraint(equalTo: preview.bottomAnchor, constant: -16),
         ])
 
-        // The panel prefers to fit fully, but may clip at small window
-        // heights rather than fight the required constraints.
-        let panelBottom = panel.bottomAnchor.constraint(lessThanOrEqualTo: root.bottomAnchor, constant: -20)
-        panelBottom.priority = NSLayoutConstraint.Priority(900)
-        panelBottom.isActive = true
-
         self.view = root
-        preferredContentSize = NSSize(width: 980, height: 700)
+        preferredContentSize = Self.initialContentSize
     }
 
     private static func captionLabel(_ text: String) -> NSTextField {
@@ -209,12 +253,52 @@ final class ShowcaseViewController: NSViewController {
         return stack
     }
 
+    private func fadeControls() -> NSView {
+        fadePulseSlider.numberOfTickMarks = 5
+        fadePulseSlider.allowsTickMarkValuesOnly = true
+        fadePauseSlider.toolTip = "Full-opacity pause between pulses. Zero runs them back-to-back."
+
+        let stack = NSStackView(views: [
+            fadeCheckbox,
+            compactSliderRow("Pulses", slider: fadePulseSlider, value: fadePulseValue),
+            compactSliderRow("Depth", slider: fadeDepthSlider, value: fadeDepthValue),
+            compactSliderRow("Pulse", slider: fadePulseDurationSlider, value: fadePulseDurationValue),
+            compactSliderRow("Pause", slider: fadePauseSlider, value: fadePauseValue),
+            compactSliderRow("Travel", slider: fadeTravelSlider, value: fadeTravelValue),
+        ])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 5
+        return stack
+    }
+
+    private func compactSliderRow(_ title: String, slider: NSSlider, value: NSTextField) -> NSView {
+        let titleLabel = NSTextField(labelWithString: title)
+        titleLabel.font = .systemFont(ofSize: 10)
+        titleLabel.textColor = .secondaryLabelColor
+        titleLabel.alignment = .right
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.widthAnchor.constraint(equalToConstant: 44).isActive = true
+
+        value.font = .monospacedDigitSystemFont(ofSize: 10, weight: .regular)
+        value.textColor = .secondaryLabelColor
+        value.alignment = .right
+        value.translatesAutoresizingMaskIntoConstraints = false
+        value.widthAnchor.constraint(equalToConstant: 43).isActive = true
+
+        let row = NSStackView(views: [titleLabel, slider, value])
+        row.orientation = .horizontal
+        row.spacing = 6
+        slider.setContentHuggingPriority(.init(1), for: .horizontal)
+        return row
+    }
+
     // MARK: - Lifecycle
 
     override func viewDidLoad() {
         super.viewDidLoad()
 
-        presetPopup.addItems(withTitles: MorphPreset.allCases.map(\.displayName))
+        populatePresetPopup()
         presetPopup.target = self
         presetPopup.action = #selector(presetChanged)
 
@@ -233,17 +317,27 @@ final class ShowcaseViewController: NSViewController {
         loadRecommendedTiming(for: currentPreset)
         applySettings()
 
-        // Launch arguments for scripted demos: -preset <rawValue> -autoplay YES
+        // Launch arguments for scripted demos include -preset <rawValue>,
+        // -fade YES, -fadePause <seconds>, and -autoplay YES.
         let defaults = UserDefaults.standard
         if let presetName = defaults.string(forKey: "preset"),
-           let index = MorphPreset.allCases.firstIndex(where: { $0.rawValue == presetName }) {
-            presetPopup.selectItem(at: index)
+           let preset = MorphPreset(rawValue: presetName) {
+            selectPreset(preset)
             loadRecommendedTiming(for: currentPreset)
+            applySettings()
+        }
+        if defaults.object(forKey: "fadePause") != nil {
+            fadePauseSlider.doubleValue = defaults.double(forKey: "fadePause")
+            updateValueLabels()
             applySettings()
         }
         if defaults.bool(forKey: "autoplay") {
             autoCheckbox.state = .on
             autoToggled()
+        }
+        if defaults.bool(forKey: "fade") {
+            fadeCheckbox.state = .on
+            applySettings()
         }
     }
 
@@ -276,6 +370,38 @@ final class ShowcaseViewController: NSViewController {
         label.setText(phrases[phraseIndex])
     }
 
+    /// Starts the same transition as the visible Next Phrase control. Used by
+    /// the Showcase's opt-in screenshot launch hook so visual evidence stays
+    /// on the real app path.
+    func beginScriptedMorph() {
+        nextPhrase()
+    }
+
+    /// Draws the label's in-flight Core Animation presentation into a window
+    /// capture after AppKit has drawn the surrounding controls' model state.
+    func drawAnimatedPreview(in context: CGContext, relativeTo contentView: NSView) {
+        guard let presentationLayer = label.layer?.presentation() else { return }
+        let labelRect = label.convert(label.bounds, to: contentView)
+
+        clearAnimatedPreview(in: context, relativeTo: contentView)
+
+        context.saveGState()
+        context.translateBy(x: labelRect.minX, y: labelRect.minY)
+        presentationLayer.render(in: context)
+        context.restoreGState()
+    }
+
+    /// Removes the model-layer label from a cached AppKit backdrop. The live
+    /// presentation layer is composited over this clean preview in each frame.
+    func clearAnimatedPreview(in context: CGContext, relativeTo contentView: NSView) {
+        let labelRect = label.convert(label.bounds, to: contentView)
+        context.saveGState()
+        context.setBlendMode(.copy)
+        context.setFillColor((view.window?.backgroundColor ?? .windowBackgroundColor).cgColor)
+        context.fill(labelRect)
+        context.restoreGState()
+    }
+
     @objc private func autoToggled() {
         autoTimer?.invalidate()
         autoTimer = nil
@@ -301,7 +427,32 @@ final class ShowcaseViewController: NSViewController {
                                    stagger: staggerSlider.doubleValue,
                                    timingFunction: CAMediaTimingFunction(name: easing))
         label.effect = currentPreset.makeEffect(intensity: intensitySlider.doubleValue)
+        label.fadeStyle = fadeCheckbox.state == .on ? .traveling : .none
+        label.fadeConfiguration = MorphFadeConfiguration(
+            pulseCount: Int(fadePulseSlider.doubleValue.rounded()),
+            minimumOpacity: Float(1 - fadeDepthSlider.doubleValue),
+            pulseDuration: fadePulseDurationSlider.doubleValue,
+            pauseDuration: fadePauseSlider.doubleValue,
+            travelDuration: fadeTravelSlider.doubleValue
+        )
         label.reusesMatchingCharacters = reuseCheckbox.state == .on
+
+        let usesFade = fadeCheckbox.state == .on
+        [fadePulseSlider, fadeDepthSlider, fadePulseDurationSlider, fadePauseSlider, fadeTravelSlider]
+            .forEach { $0.isEnabled = usesFade }
+
+        let usesWholeLine = label.effect is WholeLineMorphEffect
+        staggerSlider.isEnabled = !usesWholeLine
+        reuseCheckbox.isEnabled = !usesWholeLine
+        durationCaption.stringValue = usesWholeLine
+            ? "Animation time for the complete line handoff."
+            : "Animation time for a single character — not the whole morph. Spring effects (Bounce, Drop) settle a little later."
+        staggerCaption.stringValue = usesWholeLine
+            ? "Not used: the complete line moves in lockstep without a character cascade."
+            : "Extra start delay per character, creating the cascade. Whole morph ≈ duration + stagger × (characters − 1)."
+        reuseCheckbox.toolTip = usesWholeLine
+            ? "Whole-line effects replace both complete lines, so matching characters are not reused."
+            : nil
     }
 
     private func updateValueLabels() {
@@ -309,5 +460,46 @@ final class ShowcaseViewController: NSViewController {
         staggerValue.stringValue = String(format: "%.3f s", staggerSlider.doubleValue)
         intensityValue.stringValue = String(format: "%.2f", intensitySlider.doubleValue)
         fontValue.stringValue = String(format: "%.0f pt", fontSlider.doubleValue)
+        fadePulseValue.stringValue = String(format: "%.0f×", fadePulseSlider.doubleValue.rounded())
+        fadeDepthValue.stringValue = String(format: "%.0f%%", fadeDepthSlider.doubleValue * 100)
+        fadePulseDurationValue.stringValue = String(format: "%.2fs", fadePulseDurationSlider.doubleValue)
+        fadePauseValue.stringValue = String(format: "%.2fs", fadePauseSlider.doubleValue)
+        fadeTravelValue.stringValue = String(format: "%.2fs", fadeTravelSlider.doubleValue)
     }
+
+    private func populatePresetPopup() {
+        guard let menu = presetPopup.menu else { return }
+        menu.removeAllItems()
+
+        let singleCharacter = MorphPreset.allCases.filter { $0.scope == .singleCharacter }
+        let fullRow = MorphPreset.allCases.filter { $0.scope == .wholeLine }
+        addPresetSection("Single Character", presets: singleCharacter, to: menu)
+        menu.addItem(.separator())
+        addPresetSection("Full Row", presets: fullRow, to: menu)
+        selectPreset(singleCharacter.first ?? .crossfade)
+    }
+
+    private func addPresetSection(_ title: String, presets: [MorphPreset], to menu: NSMenu) {
+        let header = NSMenuItem(title: title.uppercased(), action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        menu.addItem(header)
+        for preset in presets {
+            let item = NSMenuItem(title: preset.displayName, action: nil, keyEquivalent: "")
+            item.representedObject = preset.rawValue
+            menu.addItem(item)
+        }
+    }
+
+    private func selectPreset(_ preset: MorphPreset) {
+        guard let index = presetPopup.itemArray.firstIndex(where: {
+            ($0.representedObject as? String) == preset.rawValue
+        }) else { return }
+        presetPopup.selectItem(at: index)
+    }
+}
+
+/// Keeps a scrollable control document pinned to its visual top as the window
+/// becomes shorter than the complete settings panel.
+private final class ShowcaseFlippedView: NSView {
+    override var isFlipped: Bool { true }
 }
