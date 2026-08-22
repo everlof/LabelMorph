@@ -16,6 +16,13 @@ public final class MorphingLabel: MorphView {
 
     // MARK: - Public API
 
+    /// How far a glyph's raster tile deliberately extends past its typographic box.
+    ///
+    /// Most hosts leave a label's layer unclipped and need not care. A host that does clip —
+    /// navigation chrome, for example — reserves this much room on each horizontal edge so the
+    /// first and last raster tiles are not cut at the host boundary.
+    public static let glyphRasterOverflow = GlyphRaster.padding
+
     // Each of these three rebuilds or repaints every glyph layer, and a host that
     // reconfigures a reused view restates all of them on every pass. Assigning the value
     // already in force must therefore cost nothing.
