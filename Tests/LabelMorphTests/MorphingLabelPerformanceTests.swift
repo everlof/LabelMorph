@@ -31,6 +31,8 @@ final class MorphingLabelPerformanceTests: XCTestCase {
 
         measure(metrics: [XCTClockMetric(), XCTCPUMetric(), XCTMemoryMetric()]) {
             fixture.label.setText(fixture.label.text == first ? second : first)
+            // The morph is built in the layout pass, so the pass is part of what is measured.
+            fixture.window.layoutIfNeeded()
         }
     }
 

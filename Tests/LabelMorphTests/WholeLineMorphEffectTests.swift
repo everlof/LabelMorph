@@ -12,6 +12,7 @@ final class WholeLineMorphEffectTests: XCTestCase {
         XCTAssertEqual(outgoing.count, 4)
 
         fixture.label.setText("AAAB")
+        fixture.window.layoutIfNeeded()
 
         let allGlyphs = glyphLayers(in: fixture.label)
         let outgoingIDs = Set(outgoing.map(ObjectIdentifier.init))
@@ -60,6 +61,7 @@ final class WholeLineMorphEffectTests: XCTestCase {
         let outgoing = glyphLayers(in: fixture.label)
 
         fixture.label.setText("NEXT")
+        fixture.window.layoutIfNeeded()
 
         let outgoingIDs = Set(outgoing.map(ObjectIdentifier.init))
         let incoming = glyphLayers(in: fixture.label).filter {

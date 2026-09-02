@@ -17,6 +17,7 @@ final class MorphFadeStyleTests: XCTestCase {
             fixture.label.fadeStyle = .traveling
 
             fixture.label.setText("HIJKLMN")
+            fixture.window.layoutIfNeeded()
 
             let carriers = fadeCarriers(in: fixture.label)
             XCTAssertEqual(carriers.count, 7, preset.displayName)
@@ -40,6 +41,7 @@ final class MorphFadeStyleTests: XCTestCase {
         fixture.label.fadeStyle = .traveling
 
         fixture.label.setText("HIJKLMN")
+        fixture.window.layoutIfNeeded()
 
         let animation = try XCTUnwrap(
             fadeCarriers(in: fixture.label).first?.animation(forKey: Fade.animationKey)
@@ -80,6 +82,7 @@ final class MorphFadeStyleTests: XCTestCase {
         fixture.label.fadeStyle = .traveling
 
         fixture.label.setText("ABCDEFGH")
+        fixture.window.layoutIfNeeded()
 
         let carriersBefore = fadeCarriers(in: fixture.label)
         let transientsBefore = descendants(of: fixture.label.layer)
@@ -115,6 +118,7 @@ final class MorphFadeStyleTests: XCTestCase {
         )
 
         fixture.label.setText("HIJKLMN")
+        fixture.window.layoutIfNeeded()
 
         let animations = try fadeCarriers(in: fixture.label).map {
             try XCTUnwrap($0.animation(forKey: Fade.animationKey) as? CAKeyframeAnimation)
@@ -154,6 +158,7 @@ final class MorphFadeStyleTests: XCTestCase {
         )
 
         fixture.label.setText("HIJKLMN")
+        fixture.window.layoutIfNeeded()
 
         let animation = try XCTUnwrap(
             fadeCarriers(in: fixture.label).first?.animation(forKey: Fade.animationKey)
@@ -177,6 +182,7 @@ final class MorphFadeStyleTests: XCTestCase {
         fixture.label.fadeStyle = .traveling
 
         fixture.label.setText("HIJKLMN")
+        fixture.window.layoutIfNeeded()
 
         let transientShapes = descendants(of: fixture.label.layer)
             .filter { $0.name == MorphTransientLayer.name }
@@ -191,6 +197,7 @@ final class MorphFadeStyleTests: XCTestCase {
         let fixture = hostedLabel(effect: CrossfadeEffect())
 
         fixture.label.setText("HIJKLMN")
+        fixture.window.layoutIfNeeded()
 
         XCTAssertTrue(fadeCarriers(in: fixture.label).isEmpty)
         XCTAssertFalse(

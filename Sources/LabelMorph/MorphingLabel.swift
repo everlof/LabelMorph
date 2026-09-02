@@ -116,14 +116,31 @@ public final class MorphingLabel: MorphView {
         set { setText(newValue) }
     }
 
+    /// Replaces the text, morphing from the line on screen when `animated` and the label is in
+    /// a window with bounds; otherwise the new text lands directly.
+    ///
+    /// The morph is built in the label's next layout pass, not here. Every character is
+    /// animated to a slot computed against the bounds the new text settles in, and only a
+    /// layout pass knows those: the text changes the intrinsic size, and Auto Layout or a
+    /// SwiftUI host may move or resize the label in answer. Resolving that eagerly meant
+    /// forcing the *window* to lay out from inside a setter, and a setter runs wherever the
+    /// host calls it — including a `UIViewRepresentable`'s `updateUIView`, which is SwiftUI's
+    /// own graph update. A window layout there lays the hosting view out, which renders the
+    /// SwiftUI graph while that same graph is still updating, and AttributeGraph reports the
+    /// re-entry as a dependency cycle for every attribute it meets on the way round — on the
+    /// phone, 46 `cycle detected` lines on every status change. `layout()` and
+    /// `layoutSubviews()` see the same settled geometry without leaving the label's own layout
+    /// scope, so that is where the morph is built. `text` and `intrinsicContentSize` answer for
+    /// the new text immediately.
     public func setText(_ newText: String, animated: Bool = true) {
         guard newText != storedText else { return }
         guard animated, window != nil, !bounds.isEmpty else {
+            pendingMorphOrigin = nil
             storedText = newText
             rebuild()
             return
         }
-        morph(to: newText)
+        scheduleMorph(to: newText)
     }
 
     /// Plays the configured fade over the settled text without changing it.
@@ -136,7 +153,8 @@ public final class MorphingLabel: MorphView {
               window != nil,
               !bounds.isEmpty,
               !charLayers.isEmpty,
-              activeTextMorphGeneration == nil else { return }
+              activeTextMorphGeneration == nil,
+              pendingMorphOrigin == nil else { return }
 
         generation += 1
         let currentGeneration = generation
@@ -207,9 +225,7 @@ public final class MorphingLabel: MorphView {
 #if canImport(AppKit)
     public override func layout() {
         super.layout()
-        if !isResolvingMorphLayout {
-            relayoutCurrent()
-        }
+        layoutGlyphs()
     }
 
     public override func viewDidMoveToWindow() {
@@ -229,9 +245,7 @@ public final class MorphingLabel: MorphView {
 #elseif canImport(UIKit)
     public override func layoutSubviews() {
         super.layoutSubviews()
-        if !isResolvingMorphLayout {
-            relayoutCurrent()
-        }
+        layoutGlyphs()
     }
 
     public override func didMoveToWindow() {
@@ -268,7 +282,9 @@ public final class MorphingLabel: MorphView {
     /// A text morph can consist entirely of retained moves or incoming glyphs,
     /// so outgoing-layer presence is not a reliable ownership signal.
     private var activeTextMorphGeneration: Int?
-    private var isResolvingMorphLayout = false
+    /// Where the line stood in its window when the text it is morphing towards was set, held
+    /// until the layout pass that builds the morph; `nil` when no morph is waiting.
+    private var pendingMorphOrigin: CGPoint?
 
     /// AppKit creates a backing layer only after `wantsLayer`; UIKit always has one. Keeping the
     /// optional shape here lets the shared engine retain AppKit's lifecycle without forking all
@@ -326,7 +342,47 @@ public final class MorphingLabel: MorphView {
         return result
     }
 
-    private func morph(to newText: String) {
+    /// Records the text change and asks for the layout pass that animates it.
+    ///
+    /// The line's position is read now, before the new intrinsic size has moved anything, so
+    /// the morph can keep the old characters where the eye last saw them. A second change
+    /// before that pass keeps the first reading: the glyphs on screen have not moved yet, and
+    /// the morph runs from what is drawn to whatever text is in force when layout comes.
+    private func scheduleMorph(to newText: String) {
+        if pendingMorphOrigin == nil {
+            pendingMorphOrigin = convert(CGPoint.zero, to: nil)
+        }
+        storedText = newText
+        invalidateIntrinsicContentSize()
+#if canImport(AppKit)
+        needsLayout = true
+#else
+        setNeedsLayout()
+#endif
+    }
+
+    /// The one place glyphs are laid out: a text change waiting for this pass becomes its
+    /// morph, and anything else — a bounds, alignment or scale change — repositions the line
+    /// that is already drawn.
+    private func layoutGlyphs() {
+        if let originBefore = pendingMorphOrigin {
+            pendingMorphOrigin = nil
+            morph(from: originBefore)
+        } else {
+            relayoutCurrent()
+        }
+    }
+
+    /// Builds the morph from the glyphs on screen to `storedText`, inside the bounds this
+    /// layout pass has settled.
+    private func morph(from originBefore: CGPoint) {
+        guard window != nil, !bounds.isEmpty else {
+            // The host lost its window or its size between the change and this pass, so there
+            // is nothing to animate inside: the new text lands the way `setText` lands it.
+            rebuild()
+            return
+        }
+
         generation += 1
         let currentGeneration = generation
 
@@ -342,21 +398,11 @@ public final class MorphingLabel: MorphView {
         let oldSlots = visibleSlots
         let oldLayers = charLayers
 
-        storedText = newText
-
-        // Resolve the label's final geometry now, so every animation is built
-        // against the bounds the text will actually settle in.
-        let originBefore = convert(CGPoint.zero, to: nil)
-        isResolvingMorphLayout = true
-        invalidateIntrinsicContentSize()
-        window?.layoutIfNeeded()
-        isResolvingMorphLayout = false
-
-        // Auto Layout may have shifted the label itself (re-centering after a
-        // width change). Shift the old characters' model frames to keep their
-        // on-screen position, so travel to the new layout happens inside the
-        // morph animations — otherwise the whole line jumps first and morphs
-        // second.
+        // Auto Layout may have shifted the label itself since the text changed
+        // (re-centering after a width change). Shift the old characters' model
+        // frames to keep their on-screen position, so travel to the new layout
+        // happens inside the morph animations — otherwise the whole line jumps
+        // first and morphs second.
         // Snapped to the pixel grid the slots were laid out on: the characters
         // being shifted are already sitting on it, and a fractional shift would
         // take every one of them off it for the length of the morph.
@@ -596,6 +642,7 @@ public final class MorphingLabel: MorphView {
 
     /// Tears everything down and lays the current text out from scratch.
     private func rebuild() {
+        pendingMorphOrigin = nil
         generation += 1
         activeTextMorphGeneration = nil
         (charLayers + leavingLayers).forEach { $0.removeFromSuperlayer() }
@@ -624,6 +671,10 @@ public final class MorphingLabel: MorphView {
 
     /// Repositions existing layers after a bounds, alignment, or similar change.
     private func relayoutCurrent() {
+        // The layers on screen still draw the text a waiting morph starts from. Laying them out
+        // for `storedText` here would replace them with the new characters unanimated, and the
+        // morph that follows would find nothing left to move. That pass lays everything out.
+        guard pendingMorphOrigin == nil else { return }
         resizeFadeCarriers()
 
         // A width change can change how much of the text fits, so this is also where a
