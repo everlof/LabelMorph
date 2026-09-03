@@ -81,8 +81,14 @@ final class GlyphLayer: CATextLayer {
     /// Moves the layer onto `slot`, which owns both the frame and the sub-pixel
     /// phase its raster was cached under — they are one decision and must not be
     /// assigned separately.
+    ///
+    /// The slot owns the frame in both directions: a layer that is not where its slot
+    /// says is brought back even when the slot it is handed is the one it already holds.
+    /// `shift(by:)` keeps the two together so a morph can see what it has to travel;
+    /// this guard is what turns any frame written behind the slot's back into a slip
+    /// the next layout corrects rather than a glyph left off its line for good.
     func apply(_ slot: CharacterSlot) {
-        guard slot != self.slot else { return }
+        guard slot != self.slot || frame != slot.frame else { return }
 
         let rasterChanged = self.slot.map {
             $0.character != slot.character
@@ -95,6 +101,25 @@ final class GlyphLayer: CATextLayer {
         self.slot = slot
         if framed { frame = slot.frame }
         if rasterChanged { setNeedsDisplay() }
+    }
+
+    /// Moves the layer by `delta` without changing what it draws.
+    ///
+    /// The slot moves with the frame, and that is the point of this being a method rather
+    /// than a frame assignment. `apply(_:)` decides it has nothing to do by comparing slots,
+    /// so a layer whose frame was moved *behind* its slot looked settled while sitting
+    /// somewhere else: the label shifted every old glyph to stay where the eye last saw it,
+    /// then handed the character it was keeping the slot it already held, and the layer kept
+    /// the shift — no animation was asked to move it, and no later pass had a reason to
+    /// correct a slot that already matched. A sidebar row renamed in the pass that moved it
+    /// drew its first letter half a line below the rest of its name, indefinitely.
+    /// Moving the slot too means the next `apply` sees a real difference and the effect is
+    /// asked to travel it, and an effect positioning a stand-in from `slot.inkFrame` starts
+    /// it where the glyph is actually drawn.
+    func shift(by delta: CGPoint) {
+        guard delta != .zero else { return }
+        frame = frame.offsetBy(dx: delta.x, dy: delta.y)
+        slot = slot?.offset(by: delta)
     }
 
     // MARK: - CALayer

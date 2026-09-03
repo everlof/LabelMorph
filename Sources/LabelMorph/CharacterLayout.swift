@@ -27,6 +27,22 @@ struct CharacterSlot: Equatable {
     /// sub-pixel phase is added.
     let inset: CGFloat
     let isWhitespace: Bool
+
+    /// The same slot moved by `delta`: the frame and the ink box travel together and
+    /// everything the raster was cached under — character, size, phase, baseline, inset —
+    /// stays as it was. For a glyph that is kept where the eye last saw it while the line
+    /// it belongs to has moved; see `GlyphLayer.shift(by:)`.
+    func offset(by delta: CGPoint) -> CharacterSlot {
+        CharacterSlot(
+            character: character,
+            frame: frame.offsetBy(dx: delta.x, dy: delta.y),
+            inkFrame: inkFrame.offsetBy(dx: delta.x, dy: delta.y),
+            phaseBucket: phaseBucket,
+            baseline: baseline,
+            inset: inset,
+            isWhitespace: isWhitespace
+        )
+    }
 }
 
 /// Lays out a single line of text with Core Text and returns per-character frames.

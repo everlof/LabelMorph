@@ -399,13 +399,16 @@ public final class MorphingLabel: MorphView {
         let oldLayers = charLayers
 
         // Auto Layout may have shifted the label itself since the text changed
-        // (re-centering after a width change). Shift the old characters' model
-        // frames to keep their on-screen position, so travel to the new layout
-        // happens inside the morph animations — otherwise the whole line jumps
-        // first and morphs second.
+        // (re-centering after a width change, a row scrolled into view). Shift
+        // the old characters to keep their on-screen position, so travel to the new
+        // layout happens inside the morph animations — otherwise the whole line
+        // jumps first and morphs second.
         // Snapped to the pixel grid the slots were laid out on: the characters
         // being shifted are already sitting on it, and a fractional shift would
         // take every one of them off it for the length of the morph.
+        // The shift goes through the slot, not the frame alone: a kept character is
+        // about to be handed a slot equal to the one it holds, and only a slot that
+        // has moved with the frame lets `apply` see that the layer is not on it.
         let originAfter = convert(CGPoint.zero, to: nil)
         let scale = backingScale
         let shift = CGPoint(x: ((originBefore.x - originAfter.x) * scale).rounded() / scale,
@@ -413,9 +416,7 @@ public final class MorphingLabel: MorphView {
         if shift != .zero {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            for charLayer in oldLayers {
-                charLayer.frame = charLayer.frame.offsetBy(dx: shift.x, dy: shift.y)
-            }
+            oldLayers.forEach { $0.shift(by: shift) }
             CATransaction.commit()
         }
 
