@@ -124,12 +124,22 @@ final class GlyphLayer: CATextLayer {
 
     // MARK: - CALayer
 
+    /// A character drawn in the slot's place while an effect passes through others — a
+    /// scramble's decoder. Nil draws the slot's own character. Display-only: the slot, its
+    /// frame and its metrics stay the settled character's, so the line never reflows mid-morph.
+    var transientCharacter: String? {
+        didSet {
+            guard transientCharacter != oldValue else { return }
+            setNeedsDisplay()
+        }
+    }
+
     override func display() {
         guard let slot, bounds.width > 0, bounds.height > 0 else {
             contents = nil
             return
         }
-        contents = GlyphRaster.tile(character: slot.character,
+        contents = GlyphRaster.tile(character: transientCharacter ?? slot.character,
                                     font: glyphFont,
                                     ink: ink,
                                     background: rasterBackground ?? Self.unstated,
