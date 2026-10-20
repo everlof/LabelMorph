@@ -8,7 +8,7 @@ let package = Package(
         .iOS(.v17),
     ],
     products: [
-        .library(name: "LabelMorph", targets: ["LabelMorph"]),
+        .library(name: "LabelMorph", type: .static, targets: ["LabelMorph"]),
     ],
     targets: [
         .target(name: "LabelMorph"),
