@@ -6,6 +6,7 @@ import QuartzCore
 /// receives the per-character layer plus a `MorphContext` with timing and
 /// stagger helpers. Model values on the layer are already set to their final
 /// state; effects add explicit animations on top.
+@MainActor
 public protocol TextMorphEffect: AnyObject {
 
     /// Animate a character that appears in the new text.
@@ -27,6 +28,7 @@ public protocol TextMorphEffect: AnyObject {
 /// the new one at its slot — instead of separately animating the old
 /// character out and the new one in. `MorphingLabel` pairs old and new
 /// characters by position for these effects.
+@MainActor
 public protocol TextReplacementMorphEffect: TextMorphEffect {
     /// Animate `oldLayer`'s character turning into `newLayer`'s character.
     /// Both layers are in the layer tree; `container` is the label's backing
@@ -42,6 +44,7 @@ public protocol TextReplacementMorphEffect: TextMorphEffect {
 /// Unlike character-scoped effects, a whole-line effect does not diff or reuse
 /// matching characters. `MorphingLabel` builds both complete glyph runs and
 /// calls this method once, allowing the effect to move each run in lockstep.
+@MainActor
 public protocol WholeLineMorphEffect: TextMorphEffect {
     /// Animate one complete single-line value into another.
     ///

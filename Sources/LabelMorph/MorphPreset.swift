@@ -50,6 +50,7 @@ public enum MorphPreset: String, CaseIterable {
     }
 
     /// Creates the effect, scaling its parameters by `intensity` (0...1).
+    @MainActor
     public func makeEffect(intensity: Double = 0.6) -> TextMorphEffect {
         let intensity = CGFloat(max(0, min(1, intensity)))
         switch self {

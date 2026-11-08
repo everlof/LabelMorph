@@ -60,6 +60,7 @@ public final class ScrambleEffect: TextMorphEffect {
 /// their slot's character themselves — setting `string` on one changed nothing on screen, so the
 /// decoder only ever faded — and a glyph layer is handed a transient character to draw instead.
 /// A plain `CATextLayer` still gets its `string` swapped.
+@MainActor
 final class ScrambleTicker {
 
     struct Entry {
@@ -99,7 +100,7 @@ final class ScrambleTicker {
     private func startIfNeeded(interval: TimeInterval) {
         guard timer == nil else { return }
         let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
-            self?.tick()
+            MainActor.assumeIsolated { self?.tick() }
         }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer

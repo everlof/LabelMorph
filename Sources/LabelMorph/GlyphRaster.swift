@@ -132,47 +132,47 @@ enum GlyphRaster {
                               inset: inset,
                               onLightBackground: onLight)
 
-        lock.lock()
-        defer { lock.unlock() }
+        cache.lock.lock()
+        defer { cache.lock.unlock() }
 
         if isColorGlyphLocked(character, font: font) {
             // Keyed on the mask key like any other tile, minus the ink: the artwork is what it
             // is, and re-tinting it is exactly what must not happen.
-            if let cached = colorCache[maskKey] { return cached }
+            if let cached = cache.colorCache[maskKey] { return cached }
             guard let drawn = renderColor(maskKey, font: font) else { return nil }
-            if colorCache.count >= maxImages { colorCache.removeAll(keepingCapacity: true) }
-            colorCache[maskKey] = drawn
+            if cache.colorCache.count >= maxImages { cache.colorCache.removeAll(keepingCapacity: true) }
+            cache.colorCache[maskKey] = drawn
             return drawn
         }
 
         let imageKey = ImageKey(mask: maskKey, ink: packed(ink))
-        if let cached = imageCache[imageKey] { return cached }
+        if let cached = cache.imageCache[imageKey] { return cached }
 
         let mask: Mask
-        if let cached = maskCache[maskKey] {
+        if let cached = cache.maskCache[maskKey] {
             mask = cached
         } else {
             guard let rendered = renderMask(maskKey, font: font) else { return nil }
-            if maskCache.count >= maxMasks { maskCache.removeAll(keepingCapacity: true) }
-            maskCache[maskKey] = rendered
+            if cache.maskCache.count >= maxMasks { cache.maskCache.removeAll(keepingCapacity: true) }
+            cache.maskCache[maskKey] = rendered
             mask = rendered
         }
 
         guard let image = tint(mask, with: ink, scale: scale) else { return nil }
-        if imageCache.count >= maxImages { imageCache.removeAll(keepingCapacity: true) }
-        imageCache[imageKey] = image
+        if cache.imageCache.count >= maxImages { cache.imageCache.removeAll(keepingCapacity: true) }
+        cache.imageCache[imageKey] = image
         return image
     }
 
     /// Drops every cached tile. Rasterisation depends on the display's backing
     /// scale, so this is what a move between screens is entitled to.
     static func flush() {
-        lock.lock()
-        defer { lock.unlock() }
-        maskCache.removeAll()
-        imageCache.removeAll()
-        colorCache.removeAll()
-        colorFaceCache.removeAll()
+        cache.lock.lock()
+        defer { cache.lock.unlock() }
+        cache.maskCache.removeAll()
+        cache.imageCache.removeAll()
+        cache.colorCache.removeAll()
+        cache.colorFaceCache.removeAll()
     }
 
     /// Whether Core Text satisfies this character from a colour face.
@@ -181,17 +181,17 @@ enum GlyphRaster {
     /// what decides: the same scalar reaches an outline face on one platform and Apple Color
     /// Emoji on another, and a Unicode property cannot tell them apart.
     static func isColorGlyph(_ character: String, font: MorphFont) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
+        cache.lock.lock()
+        defer { cache.lock.unlock() }
         return isColorGlyphLocked(character, font: font)
     }
 
-    /// The same answer, for a caller already holding the lock.
+    /// The same answer, for a caller already holding the cache lock.
     private static func isColorGlyphLocked(_ character: String, font: MorphFont) -> Bool {
         let key = FaceKey(character: character,
                           fontName: font.fontName,
                           pointSize: font.pointSize)
-        if let cached = colorFaceCache[key] { return cached }
+        if let cached = cache.colorFaceCache[key] { return cached }
 
         let line = CTLineCreateWithAttributedString(
             NSAttributedString(string: character, attributes: [.font: font, .ligature: 0])
@@ -206,8 +206,8 @@ enum GlyphRaster {
                 break
             }
         }
-        if colorFaceCache.count >= maxMasks { colorFaceCache.removeAll(keepingCapacity: true) }
-        colorFaceCache[key] = isColor
+        if cache.colorFaceCache.count >= maxMasks { cache.colorFaceCache.removeAll(keepingCapacity: true) }
+        cache.colorFaceCache[key] = isColor
         return isColor
     }
 
@@ -249,11 +249,18 @@ enum GlyphRaster {
         let pointSize: CGFloat
     }
 
-    private static let lock = NSLock()
-    private static var maskCache: [MaskKey: Mask] = [:]
-    private static var imageCache: [ImageKey: CGImage] = [:]
-    private static var colorCache: [MaskKey: CGImage] = [:]
-    private static var colorFaceCache: [FaceKey: Bool] = [:]
+    private static let cache = RasterCache()
+
+    /// Tile, flush and face lookup hold `lock` for every cache access, including rendering.
+    /// Keeping the lock and its protected state in one owner makes that cross-thread contract
+    /// explicit; immutable raster results can then leave the critical section.
+    private final class RasterCache: @unchecked Sendable {
+        let lock = NSLock()
+        var maskCache: [MaskKey: Mask] = [:]
+        var imageCache: [ImageKey: CGImage] = [:]
+        var colorCache: [MaskKey: CGImage] = [:]
+        var colorFaceCache: [FaceKey: Bool] = [:]
+    }
 
     /// Generous enough that a sidebar never thrashes, small enough that the
     /// crude evict-everything policy below stays affordable. A tile is on the
